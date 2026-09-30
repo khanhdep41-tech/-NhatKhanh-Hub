@@ -7,7 +7,7 @@ local PlaceId = game.PlaceId
 
 -- GUI
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "NhtKhanh"
+ScreenGui.Name = "NhatKhanh"
 ScreenGui.ResetOnSpawn = false
 
 if syn and syn.protect_gui then
