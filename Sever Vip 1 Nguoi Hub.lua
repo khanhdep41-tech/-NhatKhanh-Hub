@@ -10,7 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
-    warn("[Nhat Khan] Không tìm thấy LocalPlayer")
+    warn("[Nhat Khanh] Không tìm thấy LocalPlayer")
     return
 end
 
@@ -36,7 +36,7 @@ ScreenGui.IgnoreGuiInset = true
 ScreenGui.Parent = PlayerGui
 
 local Main = Instance.new("Frame")
-Main.Size = UDim2.fromOffset(580, 440)
+Main.Size = UDim2.fromOffset(650, 510)
 Main.Position = UDim2.fromScale(0.5, 0.5)
 Main.AnchorPoint = Vector2.new(0.5, 0.5)
 Main.BackgroundColor3 = Color3.fromRGB(190, 45, 150)
@@ -67,7 +67,7 @@ Title.BackgroundTransparency = 1
 Title.Position = UDim2.fromOffset(20, 15)
 Title.Size = UDim2.new(1, -40, 0, 50)
 Title.Font = Enum.Font.GothamBold
-Title.Text = "Nhat Khan Hub"
+Title.Text = "Nhat Khanh Hub"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 30
 Title.Active = true
