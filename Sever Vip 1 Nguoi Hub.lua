@@ -201,7 +201,7 @@ HopButton.BorderSizePixel = 0
 HopButton.Font = Enum.Font.GothamBold
 HopButton.Text = "CHUYỂN NGAY"
 HopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-HopButton.TextSize = 20
+HopButton.TextSize = 40
 HopButton.Parent = Main
 
 local HopCorner = Instance.new("UICorner")
@@ -274,7 +274,7 @@ pcall(function()
                 tostring(errorMessage or teleportResult)
 
             warn(
-                "[Nhat Khan] Lỗi chuyển máy chủ:",
+                "[Nhat Khanh] Lỗi chuyển máy chủ:",
                 teleportFailureMessage
             )
         end
@@ -561,7 +561,7 @@ local function hop()
         end
 
         warn(
-            "[Nhat Khan] Lần thử " ..
+            "[Nhat Khanh] Lần thử " ..
             tostring(attempt) ..
             " thất bại:"
         )
