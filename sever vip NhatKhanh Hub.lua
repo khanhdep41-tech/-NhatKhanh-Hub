@@ -1,4 +1,4 @@
---// Nhat Khan Hub
+--// Nhat Khanh Hub
 --// Volt-compatible
 --// Mục tiêu: SERVER CÔNG KHAI có ĐÚNG 1 NGƯỜI CHƠI
 
