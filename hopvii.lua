@@ -33,7 +33,7 @@ local old = pg:FindFirstChild("NhatKhanhBanWarning")
 if old then old:Destroy() end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "NhatKhanhBanWarning"
+gui.Name = "Cảnh Báo Gian Lận"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
