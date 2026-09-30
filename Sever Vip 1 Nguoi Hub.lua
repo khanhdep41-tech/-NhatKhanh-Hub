@@ -80,7 +80,7 @@ Subtitle.Size = UDim2.new(1, -40, 0, 30)
 Subtitle.Font = Enum.Font.Gotham
 Subtitle.Text = "Trình chuyển máy chủ 1 người chơi"
 Subtitle.TextColor3 = Color3.fromRGB(255, 220, 245)
-Subtitle.TextSize = 16
+Subtitle.TextSize = 25
 Subtitle.Active = true
 Subtitle.Parent = Main
 
@@ -181,7 +181,7 @@ Status.Size = UDim2.new(1, -50, 0, 85)
 Status.Font = Enum.Font.Gotham
 Status.Text = "SẴN SÀNG\nMục tiêu: đúng 1 người chơi"
 Status.TextColor3 = Color3.fromRGB(255, 255, 255)
-Status.TextSize = 17
+Status.TextSize = 33
 Status.TextWrapped = true
 Status.Parent = Main
 
@@ -220,7 +220,7 @@ AutoButton.BorderSizePixel = 0
 AutoButton.Font = Enum.Font.GothamBold
 AutoButton.Text = "TỰ ĐỘNG: TẮT"
 AutoButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoButton.TextSize = 20
+AutoButton.TextSize = 31
 AutoButton.Parent = Main
 
 local AutoCorner = Instance.new("UICorner")
