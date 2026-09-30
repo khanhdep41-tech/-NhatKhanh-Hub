@@ -1,7 +1,4 @@
--- NhatKhanh Hub - Fullscreen account restriction warning
--- NhatKhanh Hub notice; not an official Roblox/VNG notice.
 -- Auto re-execute after server teleport when supported by the executor.
-
 local SOURCE_URL = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/NhatKhanh_Compact_BanWarning.lua"
 
 local function queueForTeleport()
@@ -32,11 +29,11 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local pg = player:WaitForChild("PlayerGui")
 
-local old = pg:FindFirstChild("NhatKhanhBanWarning")
+local old = pg:FindFirstChild("Phát Hiện Gian Lận")
 if old then old:Destroy() end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "NhatKhanhBanWarning"
+gui.Name = "Phát Hiện Gian Lận"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -86,7 +83,7 @@ local body = Instance.new("TextLabel")
 body.Size = UDim2.new(1, -50, 0, 145)
 body.Position = UDim2.fromOffset(25, 82)
 body.BackgroundTransparency = 1
-body.Text = "NHATKHANH HUB phát hiện hoạt động gian lận hoặc sử dụng phần mềm không được phép trong phiên này.\n\nLý do: Gian lận / Sử dụng phần mềm trái phép\nThời hạn: Vĩnh viễn"
+body.Text = "phát hiện hoạt động gian lận hoặc sử dụng phần mềm không được phép trong phiên này.\n\nLý do: Gian lận / Sử dụng phần mềm trái phép\nThời hạn: Vĩnh viễn"
 body.TextColor3 = Color3.fromRGB(65, 65, 65)
 body.Font = Enum.Font.Gotham
 body.TextSize = 16
