@@ -1,7 +1,4 @@
--- NhatKhanh Hub - Fullscreen account restriction warning
--- NhatKhanh Hub notice; not an official Roblox/VNG notice.
 -- Auto re-execute after server teleport when supported by the executor.
-
 local SOURCE_URL = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/NhatKhanh_Compact_BanWarning.lua"
 
 local function queueForTeleport()
