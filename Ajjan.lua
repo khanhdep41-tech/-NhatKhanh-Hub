@@ -1,14 +1,13 @@
--- NhatKhanh Hub - Compact Pink Payment UI
--- Static / lightweight / non-draggable / no animation / no close button
--- Auto re-execute after server teleport when supported by the executor
+-- NhatKhanh Hub
+-- Auto re-execute Ajjan.lua after teleport
 
-local SOURCE_URL = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/NhatKhanh_Compact.lua"
+local SOURCE_URL = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
 
 local function queueForTeleport()
     local queuedCode = [[
         task.wait(2)
         pcall(function()
-            local source = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/NhatKhanh_Compact.lua"
+            local source = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
             local response = game:HttpGet(source)
             local fn = loadstring(response)
             if fn then
@@ -38,6 +37,7 @@ local function queueForTeleport()
     return false
 end
 
+pcall(queueForTeleport)
 pcall(queueForTeleport)
 
 local Players = game:GetService("Players")
