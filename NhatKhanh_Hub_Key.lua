@@ -6,31 +6,198 @@ local function nk_hwid() local f=gethwid or get_hwid; if f then local ok,v=pcall
 local function nk_read() if isfile and readfile then local ok,e=pcall(isfile,NK_KEY_FILE); if ok and e then local ok2,v=pcall(readfile,NK_KEY_FILE); if ok2 and v then return tostring(v):match("^%s*(.-)%s*$") end end end end
 local function nk_save(k) if writefile then pcall(writefile,NK_KEY_FILE,k) end end
 local function nk_del() if delfile and isfile then local ok,e=pcall(isfile,NK_KEY_FILE); if ok and e then pcall(delfile,NK_KEY_FILE) end end end
+
 local function nk_verify(k,h)
- local HttpService=game:GetService("HttpService")
- local res,err=nk_request({Url=NK_API.."/api/verify-public",Method="POST",Headers={["Content-Type"]="application/json"},Body=HttpService:JSONEncode({key=k,hwid=h})})
- if not res then return false,err or "request_failed" end
- local raw=res.Body or res.body or ""
- local ok,d=pcall(function() return HttpService:JSONDecode(raw) end)
- if not ok or type(d)~="table" then return false,"bad_response" end
- return d.valid==true,d
+    local HttpService=game:GetService("HttpService")
+
+    local res,err=nk_request({
+        Url=NK_API.."/api/verify",
+        Method="POST",
+        Headers={
+            ["Content-Type"]="application/json"
+        },
+        Body=HttpService:JSONEncode({
+            key=k,
+            hwid=h
+        })
+    })
+
+    if not res then
+        return false,err or "request_failed"
+    end
+
+    local raw=res.Body or res.body or ""
+
+    local ok,d=pcall(function()
+        return HttpService:JSONDecode(raw)
+    end)
+
+    if not ok or type(d)~="table" then
+        return false,"bad_response"
+    end
+
+    return d.valid==true,d
 end
+
 local function nk_gate()
- local Players=game:GetService("Players"); local plr=Players.LocalPlayer; local hwid=nk_hwid()
- if not hwid then warn("[NhatKhanh] Executor does not expose HWID."); return false end
- local saved=nk_read()
- if saved then local ok,d=nk_verify(saved,hwid); if ok then getgenv().NhatKhanhAuthorized=true; getgenv().NhatKhanhKey=saved; getgenv().NhatKhanhExpires=d.expires; return true end; nk_del() end
- local gui=Instance.new("ScreenGui"); gui.Name="NhatKhanhKeyGate"; gui.ResetOnSpawn=false; pcall(function() gui.Parent=game:GetService("CoreGui") end); if not gui.Parent then gui.Parent=plr:WaitForChild("PlayerGui") end
- local fr=Instance.new("Frame"); fr.Size=UDim2.fromOffset(360,190); fr.Position=UDim2.new(.5,-180,.5,-95); fr.BackgroundColor3=Color3.fromRGB(25,25,25); fr.BorderSizePixel=0; fr.Parent=gui; Instance.new("UICorner",fr).CornerRadius=UDim.new(0,12)
- local title=Instance.new("TextLabel"); title.Size=UDim2.new(1,-30,0,35); title.Position=UDim2.fromOffset(15,10); title.BackgroundTransparency=1; title.Text="NhatKhanh Hub • Enter Key"; title.TextColor3=Color3.new(1,1,1); title.TextSize=20; title.Font=Enum.Font.GothamBold; title.Parent=fr
- local box=Instance.new("TextBox"); box.Size=UDim2.new(1,-30,0,42); box.Position=UDim2.fromOffset(15,55); box.PlaceholderText="NKH-XXXXX-XXXXX-XXXXX"; box.ClearTextOnFocus=false; box.TextSize=16; box.TextColor3=Color3.new(1,1,1); box.BackgroundColor3=Color3.fromRGB(40,40,40); box.Parent=fr; Instance.new("UICorner",box).CornerRadius=UDim.new(0,8)
- local btn=Instance.new("TextButton"); btn.Size=UDim2.new(1,-30,0,40); btn.Position=UDim2.fromOffset(15,108); btn.Text="VERIFY KEY"; btn.TextSize=16; btn.TextColor3=Color3.new(1,1,1); btn.BackgroundColor3=Color3.fromRGB(75,75,75); btn.Parent=fr; Instance.new("UICorner",btn).CornerRadius=UDim.new(0,8)
- local st=Instance.new("TextLabel"); st.Size=UDim2.new(1,-30,0,25); st.Position=UDim2.fromOffset(15,153); st.BackgroundTransparency=1; st.Text=""; st.TextColor3=Color3.new(1,1,1); st.TextSize=13; st.Parent=fr
- local done=false; btn.MouseButton1Click:Connect(function() if done then return end; local k=tostring(box.Text or ""):match("^%s*(.-)%s*$"); if k=="" then st.Text="Enter your Key."; return end; local h=nk_hwid(); if not h then st.Text="HWID unsupported."; return end; btn.Text="CHECKING..."; local ok,d=nk_verify(k,h); if ok then nk_save(k); getgenv().NhatKhanhAuthorized=true; getgenv().NhatKhanhKey=k; getgenv().NhatKhanhExpires=d.expires; st.Text="Key valid"; done=true; task.wait(.5); gui:Destroy() else nk_del(); btn.Text="VERIFY KEY"; st.Text="Invalid: "..tostring(d.error or "unknown") end end)
- while gui.Parent do task.wait(.2) end
- return getgenv().NhatKhanhAuthorized==true
+    local Players=game:GetService("Players")
+    local plr=Players.LocalPlayer
+    local hwid=nk_hwid()
+
+    if not hwid then
+        warn("[NhatKhanh] Executor does not expose HWID.")
+        return false
+    end
+
+    local saved=nk_read()
+
+    if saved then
+        local ok,d=nk_verify(saved,hwid)
+
+        if ok then
+            getgenv().NhatKhanhAuthorized=true
+            getgenv().NhatKhanhKey=saved
+            getgenv().NhatKhanhExpires=d.expires
+            return true
+        end
+
+        nk_del()
+    end
+
+    local gui=Instance.new("ScreenGui")
+    gui.Name="NhatKhanhKeyGate"
+    gui.ResetOnSpawn=false
+
+    pcall(function()
+        gui.Parent=game:GetService("CoreGui")
+    end)
+
+    if not gui.Parent then
+        gui.Parent=plr:WaitForChild("PlayerGui")
+    end
+
+    local fr=Instance.new("Frame")
+    fr.Size=UDim2.fromOffset(360,190)
+    fr.Position=UDim2.new(.5,-180,.5,-95)
+    fr.BackgroundColor3=Color3.fromRGB(25,25,25)
+    fr.BorderSizePixel=0
+    fr.Parent=gui
+
+    Instance.new("UICorner",fr).CornerRadius=UDim.new(0,12)
+
+    local title=Instance.new("TextLabel")
+    title.Size=UDim2.new(1,-30,0,35)
+    title.Position=UDim2.fromOffset(15,10)
+    title.BackgroundTransparency=1
+    title.Text="NhatKhanh Hub • Enter Key"
+    title.TextColor3=Color3.new(1,1,1)
+    title.TextSize=20
+    title.Font=Enum.Font.GothamBold
+    title.Parent=fr
+
+    local box=Instance.new("TextBox")
+    box.Size=UDim2.new(1,-30,0,42)
+    box.Position=UDim2.fromOffset(15,55)
+    box.PlaceholderText="NKH-XXXXX-XXXXX-XXXXX"
+    box.ClearTextOnFocus=false
+    box.TextSize=16
+    box.TextColor3=Color3.new(1,1,1)
+    box.BackgroundColor3=Color3.fromRGB(40,40,40)
+    box.Parent=fr
+
+    Instance.new("UICorner",box).CornerRadius=UDim.new(0,8)
+
+    local btn=Instance.new("TextButton")
+    btn.Size=UDim2.new(1,-30,0,40)
+    btn.Position=UDim2.fromOffset(15,108)
+    btn.Text="VERIFY KEY"
+    btn.TextSize=16
+    btn.TextColor3=Color3.new(1,1,1)
+    btn.BackgroundColor3=Color3.fromRGB(75,75,75)
+    btn.Parent=fr
+
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,8)
+
+    local st=Instance.new("TextLabel")
+    st.Size=UDim2.new(1,-30,0,25)
+    st.Position=UDim2.fromOffset(15,153)
+    st.BackgroundTransparency=1
+    st.Text=""
+    st.TextColor3=Color3.new(1,1,1)
+    st.TextSize=13
+    st.Parent=fr
+
+    local done=false
+
+    btn.MouseButton1Click:Connect(function()
+
+        if done then
+            return
+        end
+
+        local k=tostring(box.Text or ""):match("^%s*(.-)%s*$")
+
+        if k=="" then
+            st.Text="Enter your Key."
+            return
+        end
+
+        local h=nk_hwid()
+
+        if not h then
+            st.Text="HWID unsupported."
+            return
+        end
+
+        btn.Text="CHECKING..."
+
+        local ok,d=nk_verify(k,h)
+
+        if ok then
+
+            nk_save(k)
+
+            getgenv().NhatKhanhAuthorized=true
+            getgenv().NhatKhanhKey=k
+            getgenv().NhatKhanhExpires=d.expires
+
+            st.Text="Key valid"
+
+            done=true
+
+            task.wait(.5)
+
+            gui:Destroy()
+
+        else
+
+            nk_del()
+
+            btn.Text="VERIFY KEY"
+
+            st.Text="Invalid: "..tostring(
+                d.message
+                or d.error
+                or d.reason
+                or d.detail
+                or "unknown"
+            )
+
+        end
+
+    end)
+
+    while gui.Parent do
+        task.wait(.2)
+    end
+
+    return getgenv().NhatKhanhAuthorized==true
 end
-if not nk_gate() then error("NhatKhanh Hub: Key verification failed.") end
+
+if not nk_gate() then
+    error("NhatKhanh Hub: Key verification failed.")
+end
+
 
 --// Nhat Khan Hub
 --// Volt-compatible
@@ -52,12 +219,14 @@ end
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
+
 --==================================================
 -- SOURCE URL
 --==================================================
 
 local SOURCE_URL =
     "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/NhatKhanh_Hub_Key.lua"
+
 
 --==================================================
 -- AUTO-HOP STATE
@@ -84,6 +253,7 @@ local function setAutoState(value)
     end
 
 end
+
 
 --==================================================
 -- TELEPORT QUEUE
@@ -115,7 +285,6 @@ local function queueForTeleport()
     local success = false
     local method = nil
 
-    -- queue_on_teleport
     if type(queue_on_teleport) == "function" then
 
         local ok = pcall(function()
@@ -128,7 +297,6 @@ local function queueForTeleport()
         end
     end
 
-    -- queueonteleport
     if not success and type(queueonteleport) == "function" then
 
         local ok = pcall(function()
@@ -141,7 +309,6 @@ local function queueForTeleport()
         end
     end
 
-    -- syn.queue_on_teleport
     if not success
         and type(syn) == "table"
         and type(syn.queue_on_teleport) == "function" then
@@ -168,6 +335,7 @@ local function queueForTeleport()
     return false
 end
 
+
 --==================================================
 -- XÓA GUI CŨ
 --==================================================
@@ -177,6 +345,7 @@ local old = PlayerGui:FindFirstChild("NhatKhanh")
 if old then
     old:Destroy()
 end
+
 
 --==================================================
 -- GUI
@@ -197,6 +366,7 @@ Main.BorderSizePixel = 0
 Main.Active = true
 Main.Parent = ScreenGui
 
+
 --==================================================
 -- 1/3 SIZE
 --==================================================
@@ -213,6 +383,7 @@ local MainStroke = Instance.new("UIStroke")
 MainStroke.Color = Color3.fromRGB(245, 100, 210)
 MainStroke.Thickness = 3
 MainStroke.Parent = Main
+
 
 --==================================================
 -- TITLE
@@ -239,6 +410,7 @@ Subtitle.TextColor3 = Color3.fromRGB(255, 220, 245)
 Subtitle.TextSize = 16
 Subtitle.Active = true
 Subtitle.Parent = Main
+
 
 --==================================================
 -- DRAG SYSTEM
@@ -323,6 +495,7 @@ UserInputService.InputChanged:Connect(function(input)
 
 end)
 
+
 --==================================================
 -- CURRENT SERVER
 --==================================================
@@ -351,6 +524,7 @@ CurrentCorner.CornerRadius =
     UDim.new(0, 10)
 
 CurrentCorner.Parent = CurrentLabel
+
 
 --==================================================
 -- STATUS
@@ -385,6 +559,7 @@ StatusCorner.CornerRadius =
     UDim.new(0, 10)
 
 StatusCorner.Parent = Status
+
 
 --==================================================
 -- HOP BUTTON
@@ -421,6 +596,7 @@ HopCorner.CornerRadius =
 
 HopCorner.Parent = HopButton
 
+
 --==================================================
 -- AUTO BUTTON
 --==================================================
@@ -456,12 +632,14 @@ AutoCorner.CornerRadius =
 
 AutoCorner.Parent = AutoButton
 
+
 --==================================================
 -- STATE
 --==================================================
 
 local hopping = false
 local autoHop = getAutoState()
+
 
 --==================================================
 -- STATUS FUNCTIONS
@@ -490,6 +668,7 @@ Players.PlayerRemoving:Connect(
     updatePlayerCount
 )
 
+
 --==================================================
 -- INITIAL AUTO STATE
 --==================================================
@@ -508,6 +687,7 @@ if autoHop then
     )
 
 end
+
 
 --==================================================
 -- TELEPORT ERROR
@@ -545,6 +725,7 @@ pcall(function()
     )
 
 end)
+
 
 --==================================================
 -- SERVER API
@@ -623,6 +804,7 @@ local function getServerPage(cursor)
     return data
 end
 
+
 --==================================================
 -- SHUFFLE
 --==================================================
@@ -641,6 +823,7 @@ local function shuffle(list)
 
     return list
 end
+
 
 --==================================================
 -- FIND SERVERS
@@ -748,6 +931,7 @@ local function findServers()
     return candidates
 end
 
+
 --==================================================
 -- TRY TELEPORT
 --==================================================
@@ -765,7 +949,6 @@ local function tryTeleport(server)
         .. tostring(server.maxPlayers)
     )
 
-    -- Queue BEFORE teleport
     local queued =
         queueForTeleport()
 
@@ -821,6 +1004,7 @@ local function tryTeleport(server)
 
     return true
 end
+
 
 --==================================================
 -- HOP
@@ -914,6 +1098,7 @@ local function hop()
     hopping = false
 end
 
+
 --==================================================
 -- HOP BUTTON
 --==================================================
@@ -928,6 +1113,7 @@ HopButton.MouseButton1Click:Connect(
     end
 )
 
+
 --==================================================
 -- AUTO HOP
 --==================================================
@@ -940,7 +1126,6 @@ local function startAutoHop()
 
     task.spawn(function()
 
-        -- Small delay after GUI creation
         task.wait(1)
 
         while autoHop do
@@ -1011,6 +1196,7 @@ AutoButton.MouseButton1Click:Connect(
     end
 )
 
+
 --==================================================
 -- START RESTORED AUTO HOP
 --==================================================
@@ -1018,6 +1204,7 @@ AutoButton.MouseButton1Click:Connect(
 if autoHop then
     startAutoHop()
 end
+
 
 --==================================================
 -- READY
