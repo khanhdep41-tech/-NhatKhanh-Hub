@@ -1,26 +1,65 @@
-local API_URL = "https://bloxhub-api.onrender.com"
-local SCRIPT_ENDPOINT = API_URL .. "/api/script"
+--==================================================
+-- NHATKHANH HUB LOADER
+-- Key + HWID + Auto Save Key + Auto Verify
+-- Hub Loader + Ajjan Auto Re-Execute
+--==================================================
 
-local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
-local UserInputService = game:GetService("UserInputService")
-
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
--- ==================================================
--- REMOVE OLD GUI
--- ==================================================
-
-local old = PlayerGui:FindFirstChild("BloxHubKeySystem")
-
-if old then
-    old:Destroy()
+if not game:IsLoaded() then
+    game.Loaded:Wait()
 end
 
--- ==================================================
--- HTTP REQUEST
--- ==================================================
+--==================================================
+-- CONFIG
+--==================================================
+
+local API_URL = "https://bloxhub-api.onrender.com"
+
+local VERIFY_ENDPOINT = API_URL .. "/api/verify"
+local SCRIPT_ENDPOINT = API_URL .. "/api/script"
+
+local AJJAN_URL =
+    "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
+
+local KEY_FILE = "NhatKhanh_Hub_Key.txt"
+
+--==================================================
+-- SERVICES
+--==================================================
+
+local Players = game:GetService("Players")
+local RbxAnalyticsService = game:GetService("RbxAnalyticsService")
+
+local LocalPlayer = Players.LocalPlayer
+
+--==================================================
+-- UTIL
+--==================================================
+
+local function trim(value)
+    if type(value) ~= "string" then
+        return ""
+    end
+
+    return value:match("^%s*(.-)%s*$") or ""
+end
+
+local function safeCall(fn, ...)
+    local args = {...}
+
+    local ok, result = pcall(function()
+        return fn(table.unpack(args))
+    end)
+
+    if ok then
+        return true, result
+    end
+
+    return false, result
+end
+
+--==================================================
+-- REQUEST FUNCTION
+--==================================================
 
 local executorRequest =
     (syn and syn.request)
@@ -29,887 +68,673 @@ local executorRequest =
     or (getgenv and getgenv().request)
     or (_G and rawget(_G, "request"))
 
-local function request(url, method, body, extraHeaders)
+local function request(options)
+    if type(executorRequest) == "function" then
+        local ok, response = pcall(function()
+            return executorRequest(options)
+        end)
 
-    if executorRequest then
-
-        local headers = {
-            ["Content-Type"] = "application/json"
-        }
-
-        if extraHeaders then
-            for name, value in pairs(extraHeaders) do
-                headers[name] = value
-            end
+        if ok and response then
+            return response
         end
-
-        return executorRequest({
-            Url = url,
-            Method = method or "GET",
-            Headers = headers,
-            Body = body and HttpService:JSONEncode(body) or nil
-        })
-    end
-
-    -- GET fallback
-    if method == "GET" then
-
-        return {
-            StatusCode = 200,
-            Body = game:HttpGet(url)
-        }
-    end
-
-    error("Your executor does not expose an HTTP request function.")
-end
-
--- ==================================================
--- GET HWID
--- ==================================================
-
-local function getHWID()
-
-    if type(gethwid) == "function" then
-
-        local ok, value = pcall(gethwid)
-
-        if ok and value and value ~= "" then
-            return tostring(value)
-        end
-    end
-
-    if type(get_hwid) == "function" then
-
-        local ok, value = pcall(get_hwid)
-
-        if ok and value and value ~= "" then
-            return tostring(value)
-        end
-    end
-
-    local ok, value = pcall(function()
-
-        return game:GetService(
-            "RbxAnalyticsService"
-        ):GetClientId()
-
-    end)
-
-    if ok and value and value ~= "" then
-        return tostring(value)
     end
 
     return nil
 end
 
--- ==================================================
--- TRIM
--- ==================================================
+--==================================================
+-- GET
+--==================================================
 
-local function trim(value)
+local function httpGet(url)
+    local response = request({
+        Url = url,
+        Method = "GET"
+    })
 
-    return tostring(value or "")
-        :gsub("^%s+", "")
-        :gsub("%s+$", "")
+    if response then
+        local body = response.Body or response.body
 
+        if type(body) == "string" and body ~= "" then
+            return true, body
+        end
+    end
+
+    local ok, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+
+    if ok and type(result) == "string" and result ~= "" then
+        return true, result
+    end
+
+    return false, "HTTP GET failed."
 end
 
--- ==================================================
+--==================================================
+-- POST
+--==================================================
+
+local HttpService = game:GetService("HttpService")
+
+local function httpPost(url, data)
+    if type(executorRequest) ~= "function" then
+        return false, "Executor does not support HTTP POST."
+    end
+
+    local encoded
+
+    local encodeOk, encodeResult = pcall(function()
+        return HttpService:JSONEncode(data)
+    end)
+
+    if not encodeOk then
+        return false, "Failed to encode request."
+    end
+
+    encoded = encodeResult
+
+    local response = request({
+        Url = url,
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        },
+        Body = encoded
+    })
+
+    if not response then
+        return false, "HTTP POST failed."
+    end
+
+    local statusCode =
+        response.StatusCode
+        or response.status_code
+        or response.Status
+
+    local body =
+        response.Body
+        or response.body
+
+    if type(body) ~= "string" then
+        body = ""
+    end
+
+    if tonumber(statusCode) and tonumber(statusCode) >= 400 then
+        local message = body
+
+        local decodeOk, decoded = pcall(function()
+            return HttpService:JSONDecode(body)
+        end)
+
+        if decodeOk and type(decoded) == "table" then
+            message = decoded.message or decoded.error or body
+        end
+
+        return false, tostring(message)
+    end
+
+    if body == "" then
+        return false, "Empty server response."
+    end
+
+    return true, body
+end
+
+--==================================================
+-- HWID
+--==================================================
+
+local function getHWID()
+    local possibleFunctions = {
+        "gethwid",
+        "get_hwid"
+    }
+
+    for _, name in ipairs(possibleFunctions) do
+        local fn = _G[name]
+
+        if type(fn) == "function" then
+            local ok, result = pcall(fn)
+
+            if ok and type(result) == "string" and result ~= "" then
+                return result
+            end
+        end
+
+        if getgenv then
+            local env = getgenv()
+
+            if env and type(env[name]) == "function" then
+                local ok, result = pcall(env[name])
+
+                if ok and type(result) == "string" and result ~= "" then
+                    return result
+                end
+            end
+        end
+    end
+
+    local ok, clientId = pcall(function()
+        return RbxAnalyticsService:GetClientId()
+    end)
+
+    if ok and type(clientId) == "string" and clientId ~= "" then
+        return clientId
+    end
+
+    return nil
+end
+
+--==================================================
+-- KEY FILE
+--==================================================
+
+local function saveKey(key)
+    key = trim(key)
+
+    if key == "" then
+        return false
+    end
+
+    if type(writefile) ~= "function" then
+        return false
+    end
+
+    local ok = pcall(function()
+        writefile(KEY_FILE, key)
+    end)
+
+    return ok
+end
+
+local function loadSavedKey()
+    if type(isfile) ~= "function" then
+        return nil
+    end
+
+    if type(readfile) ~= "function" then
+        return nil
+    end
+
+    local existsOk, exists = pcall(function()
+        return isfile(KEY_FILE)
+    end)
+
+    if not existsOk or not exists then
+        return nil
+    end
+
+    local readOk, content = pcall(function()
+        return readfile(KEY_FILE)
+    end)
+
+    if not readOk then
+        return nil
+    end
+
+    content = trim(content)
+
+    if content == "" then
+        return nil
+    end
+
+    return content
+end
+
+local function deleteSavedKey()
+    if type(delfile) ~= "function" then
+        return
+    end
+
+    pcall(function()
+        delfile(KEY_FILE)
+    end)
+end
+
+--==================================================
+-- GUI
+--==================================================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "NhatKhanh_Loader"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function()
+    ScreenGui.Parent = game:GetService("CoreGui")
+end)
+
+if not ScreenGui.Parent then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.fromOffset(360, 235)
+Main.Position = UDim2.new(0.5, -180, 0.5, -117)
+Main.BackgroundColor3 = Color3.fromRGB(30, 10, 27)
+Main.BorderSizePixel = 0
+Main.Parent = ScreenGui
+
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 14)
+
+local Stroke = Instance.new("UIStroke", Main)
+Stroke.Color = Color3.fromRGB(245, 65, 155)
+Stroke.Thickness = 1.5
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -30, 0, 40)
+Title.Position = UDim2.fromOffset(15, 12)
+Title.BackgroundTransparency = 1
+Title.Text = "NHATKHANH HUB"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBlack
+Title.TextSize = 22
+Title.Parent = Main
+
+local SubTitle = Instance.new("TextLabel")
+SubTitle.Size = UDim2.new(1, -30, 0, 25)
+SubTitle.Position = UDim2.fromOffset(15, 48)
+SubTitle.BackgroundTransparency = 1
+SubTitle.Text = "Key Verification"
+SubTitle.TextColor3 = Color3.fromRGB(255, 145, 210)
+SubTitle.Font = Enum.Font.Gotham
+SubTitle.TextSize = 12
+SubTitle.Parent = Main
+
+local KeyBox = Instance.new("TextBox")
+KeyBox.Size = UDim2.new(1, -30, 0, 42)
+KeyBox.Position = UDim2.fromOffset(15, 82)
+KeyBox.BackgroundColor3 = Color3.fromRGB(50, 20, 45)
+KeyBox.BorderSizePixel = 0
+KeyBox.PlaceholderText = "Enter your key..."
+KeyBox.PlaceholderColor3 = Color3.fromRGB(170, 150, 165)
+KeyBox.Text = ""
+KeyBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+KeyBox.Font = Enum.Font.Gotham
+KeyBox.TextSize = 14
+KeyBox.ClearTextOnFocus = false
+KeyBox.Parent = Main
+
+Instance.new("UICorner", KeyBox).CornerRadius = UDim.new(0, 9)
+
+local VerifyButton = Instance.new("TextButton")
+VerifyButton.Size = UDim2.new(1, -30, 0, 42)
+VerifyButton.Position = UDim2.fromOffset(15, 132)
+VerifyButton.BackgroundColor3 = Color3.fromRGB(195, 38, 125)
+VerifyButton.BorderSizePixel = 0
+VerifyButton.Text = "VERIFY KEY"
+VerifyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+VerifyButton.Font = Enum.Font.GothamBold
+VerifyButton.TextSize = 14
+VerifyButton.Parent = Main
+
+Instance.new("UICorner", VerifyButton).CornerRadius = UDim.new(0, 9)
+
+local Status = Instance.new("TextLabel")
+Status.Size = UDim2.new(1, -30, 0, 42)
+Status.Position = UDim2.fromOffset(15, 180)
+Status.BackgroundTransparency = 1
+Status.Text = "Enter your key."
+Status.TextColor3 = Color3.fromRGB(220, 200, 215)
+Status.Font = Enum.Font.Gotham
+Status.TextSize = 11
+Status.TextWrapped = true
+Status.Parent = Main
+
+--==================================================
+-- AJJAN TELEPORT
+--==================================================
+
+local ajjanQueued = false
+
+local function queueAjjan()
+    if ajjanQueued then
+        return true
+    end
+
+    local queuedCode = [[
+        task.wait(2)
+
+        pcall(function()
+            local source = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
+
+            local response = game:HttpGet(source)
+
+            if type(response) == "string" and response ~= "" then
+                local fn, err = loadstring(response)
+
+                if fn then
+                    fn()
+                else
+                    warn("[NhatKhanh] Ajjan compile error: " .. tostring(err))
+                end
+            end
+        end)
+    ]]
+
+    local queueFunctions = {
+        function()
+            if type(queue_on_teleport) == "function" then
+                queue_on_teleport(queuedCode)
+                return true
+            end
+        end,
+
+        function()
+            if type(queueonteleport) == "function" then
+                queueonteleport(queuedCode)
+                return true
+            end
+        end,
+
+        function()
+            if type(queue_on_tp) == "function" then
+                queue_on_tp(queuedCode)
+                return true
+            end
+        end,
+
+        function()
+            if type(syn) == "table"
+                and type(syn.queue_on_teleport) == "function" then
+
+                syn.queue_on_teleport(queuedCode)
+                return true
+            end
+        end
+    }
+
+    for _, fn in ipairs(queueFunctions) do
+        local ok, result = pcall(fn)
+
+        if ok and result == true then
+            ajjanQueued = true
+            return true
+        end
+    end
+
+    return false
+end
+
+--==================================================
 -- VERIFY KEY
--- ==================================================
+--==================================================
 
 local function verifyKey(key)
+    key = trim(key)
+
+    if key == "" then
+        return false, "Key is empty."
+    end
 
     local hwid = getHWID()
 
     if not hwid then
-
-        return false,
-            "Could not determine your HWID."
-
+        return false, "Could not get HWID."
     end
 
-    local ok, response = pcall(function()
+    Status.Text = "Checking Key + HWID..."
 
-        return request(
-            API_URL .. "/api/verify",
-            "POST",
-            {
-                key = key,
-                hwid = hwid
-            }
-        )
+    local ok, body = httpPost(VERIFY_ENDPOINT, {
+        key = key,
+        hwid = hwid
+    })
 
-    end)
-
-    if not ok or not response then
-
-        return false,
-            "Could not connect to the Blox Hub server."
-
+    if not ok then
+        return false, body
     end
 
-    local status =
-        tonumber(response.StatusCode) or 0
-
-    local body =
-        response.Body or ""
-
-    local decodedOk, data = pcall(function()
-
+    local decodeOk, data = pcall(function()
         return HttpService:JSONDecode(body)
-
     end)
 
-    if not decodedOk
-        or type(data) ~= "table" then
-
-        return false,
-            "The server returned an invalid response."
-
+    if not decodeOk or type(data) ~= "table" then
+        return false, "Invalid server response."
     end
 
-    if status ~= 200
-        or not data.valid then
-
-        return false,
-            tostring(
-                data.message
-                or "Key verification failed."
-            )
-
+    if data.valid ~= true then
+        return false, data.message or "Key verification failed."
     end
 
-    return true, data
+    if type(data.sessionToken) ~= "string"
+        or data.sessionToken == "" then
+
+        return false, "Server did not return a session token."
+    end
+
+    return true, data.sessionToken
 end
 
--- ==================================================
+--==================================================
 -- LOAD HUB
--- ==================================================
+--==================================================
 
 local function loadHub(sessionToken)
-
-    if not sessionToken
+    if type(sessionToken) ~= "string"
         or sessionToken == "" then
 
-        return false,
-            "Missing session token."
-
+        return false, "Missing session token."
     end
 
-    -- ----------------------------------------------
-    -- DOWNLOAD HUB
-    -- ----------------------------------------------
+    Status.Text = "Downloading NhatKhanh Hub..."
 
-    local ok, response = pcall(function()
+    local response = request({
+        Url = SCRIPT_ENDPOINT,
+        Method = "GET",
+        Headers = {
+            ["X-Session-Token"] = sessionToken
+        }
+    })
 
-        return request(
-            SCRIPT_ENDPOINT,
-            "GET",
-            nil,
-            {
-                ["X-Session-Token"] = sessionToken
-            }
-        )
-
-    end)
-
-    if not ok or not response then
-
-        return false,
-            "Could not download the Blox Hub script."
-
+    if not response then
+        return false, "Failed to request Hub."
     end
 
-    local status =
-        tonumber(response.StatusCode) or 0
+    local statusCode =
+        response.StatusCode
+        or response.status_code
+        or response.Status
 
-    if status < 200 or status >= 400 then
-
-        return false,
-            "The Blox Hub script request failed. HTTP "
-            .. tostring(status)
-
+    if tonumber(statusCode) and tonumber(statusCode) >= 400 then
+        return false, "Hub request rejected by server."
     end
 
-    -- ----------------------------------------------
-    -- GET SOURCE
-    -- ----------------------------------------------
+    local source =
+        response.Body
+        or response.body
 
-    local source = response.Body
-
-    if type(source) ~= "string"
-        or #source == 0 then
-
-        return false,
-            "The Blox Hub server returned an empty script."
-
+    if type(source) ~= "string" or source == "" then
+        return false, "Hub source is empty."
     end
 
-    -- ----------------------------------------------
-    -- COMPILE
-    -- ----------------------------------------------
+    Status.Text = "Starting NhatKhanh Hub..."
 
-    local fn, compileError =
-        loadstring(source)
+    local fn, compileError = loadstring(source)
 
     if not fn then
-
-        return false,
-            "The returned Blox Hub source could not be compiled: "
-            .. tostring(compileError)
-
+        return false, "Hub compile error: " .. tostring(compileError)
     end
 
-    -- ----------------------------------------------
-    -- RUN HUB IN SEPARATE THREAD
-    -- ----------------------------------------------
-    --
-    -- Quan trọng:
-    -- Không pcall(fn) trực tiếp nữa.
-    -- Nếu Hub có loop hoặc chạy lâu,
-    -- Loader sẽ không bị treo ở Loading.
-    --
-
+    -- Hub chạy riêng để Loader không bị treo
     task.spawn(function()
-
-        local runOk, runError =
-            pcall(fn)
+        local runOk, runError = pcall(fn)
 
         if not runOk then
-
-            warn(
-                "[Blox Hub] Failed to start Hub:"
-            )
-
-            warn(
-                tostring(runError)
-            )
-
+            warn("[NhatKhanh] Hub error:")
+            warn(tostring(runError))
         end
-
     end)
 
     return true
 end
 
--- ==================================================
--- GUI
--- ==================================================
-
-local ScreenGui =
-    Instance.new("ScreenGui")
-
-ScreenGui.Name =
-    "BloxHubKeySystem"
-
-ScreenGui.ResetOnSpawn =
-    false
-
-ScreenGui.IgnoreGuiInset =
-    true
-
-ScreenGui.Parent =
-    PlayerGui
-
--- ==================================================
--- MAIN
--- ==================================================
-
-local Main =
-    Instance.new("Frame")
-
-Main.Name =
-    "Main"
-
-Main.Size =
-    UDim2.fromOffset(
-        390,
-        230
-    )
-
-Main.Position =
-    UDim2.new(
-        0.5,
-        -195,
-        0.5,
-        -115
-    )
-
-Main.BackgroundColor3 =
-    Color3.fromRGB(
-        190,
-        45,
-        150
-    )
-
-Main.BorderSizePixel =
-    0
-
-Main.Parent =
-    ScreenGui
-
--- ==================================================
--- MAIN CORNER
--- ==================================================
-
-local Corner =
-    Instance.new("UICorner")
-
-Corner.CornerRadius =
-    UDim.new(
-        0,
-        12
-    )
-
-Corner.Parent =
-    Main
-
--- ==================================================
--- STROKE
--- ==================================================
-
-local Stroke =
-    Instance.new("UIStroke")
-
-Stroke.Color =
-    Color3.fromRGB(
-        245,
-        100,
-        210
-    )
-
-Stroke.Thickness =
-    2
-
-Stroke.Parent =
-    Main
-
--- ==================================================
--- TITLE
--- ==================================================
-
-local Title =
-    Instance.new("TextLabel")
-
-Title.BackgroundTransparency =
-    1
-
-Title.Position =
-    UDim2.fromOffset(
-        20,
-        12
-    )
-
-Title.Size =
-    UDim2.new(
-        1,
-        -40,
-        0,
-        35
-    )
-
-Title.Font =
-    Enum.Font.GothamBold
-
-Title.Text =
-    "Blox Hub"
-
-Title.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-Title.TextSize =
-    24
-
-Title.Parent =
-    Main
-
--- ==================================================
--- SUBTITLE
--- ==================================================
-
-local Subtitle =
-    Instance.new("TextLabel")
-
-Subtitle.BackgroundTransparency =
-    1
-
-Subtitle.Position =
-    UDim2.fromOffset(
-        20,
-        47
-    )
-
-Subtitle.Size =
-    UDim2.new(
-        1,
-        -40,
-        0,
-        28
-    )
-
-Subtitle.Font =
-    Enum.Font.Gotham
-
-Subtitle.Text =
-    "Enter your key to continue"
-
-Subtitle.TextColor3 =
-    Color3.fromRGB(
-        255,
-        225,
-        248
-    )
-
-Subtitle.TextSize =
-    14
-
-Subtitle.Parent =
-    Main
-
--- ==================================================
--- KEY BOX
--- ==================================================
-
-local KeyBox =
-    Instance.new("TextBox")
-
-KeyBox.Name =
-    "KeyBox"
-
-KeyBox.Position =
-    UDim2.fromOffset(
-        25,
-        88
-    )
-
-KeyBox.Size =
-    UDim2.new(
-        1,
-        -50,
-        0,
-        45
-    )
-
-KeyBox.BackgroundColor3 =
-    Color3.fromRGB(
-        255,
-        255,
-        255
-    )
-
-KeyBox.ClearTextOnFocus =
-    false
-
-KeyBox.Font =
-    Enum.Font.Gotham
-
-KeyBox.PlaceholderText =
-    "Enter your key"
-
-KeyBox.Text =
-    ""
-
-KeyBox.TextColor3 =
-    Color3.fromRGB(
-        35,
-        20,
-        32
-    )
-
-KeyBox.PlaceholderColor3 =
-    Color3.fromRGB(
-        150,
-        125,
-        145
-    )
-
-KeyBox.TextSize =
-    14
-
-KeyBox.Parent =
-    Main
-
--- ==================================================
--- KEY CORNER
--- ==================================================
-
-local KeyCorner =
-    Instance.new("UICorner")
-
-KeyCorner.CornerRadius =
-    UDim.new(
-        0,
-        8
-    )
-
-KeyCorner.Parent =
-    KeyBox
-
--- ==================================================
--- VERIFY BUTTON
--- ==================================================
-
-local VerifyButton =
-    Instance.new("TextButton")
-
-VerifyButton.Name =
-    "Verify"
-
-VerifyButton.Position =
-    UDim2.fromOffset(
-        25,
-        145
-    )
-
-VerifyButton.Size =
-    UDim2.new(
-        1,
-        -50,
-        0,
-        42
-    )
-
-VerifyButton.BackgroundColor3 =
-    Color3.fromRGB(
-        235,
-        75,
-        195
-    )
-
-VerifyButton.BorderSizePixel =
-    0
-
-VerifyButton.Font =
-    Enum.Font.GothamBold
-
-VerifyButton.Text =
-    "VERIFY KEY"
-
-VerifyButton.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-VerifyButton.TextSize =
-    15
-
-VerifyButton.Parent =
-    Main
-
--- ==================================================
--- VERIFY CORNER
--- ==================================================
-
-local VerifyCorner =
-    Instance.new("UICorner")
-
-VerifyCorner.CornerRadius =
-    UDim.new(
-        0,
-        8
-    )
-
-VerifyCorner.Parent =
-    VerifyButton
-
--- ==================================================
--- STATUS
--- ==================================================
-
-local Status =
-    Instance.new("TextLabel")
-
-Status.BackgroundTransparency =
-    1
-
-Status.Position =
-    UDim2.fromOffset(
-        20,
-        192
-    )
-
-Status.Size =
-    UDim2.new(
-        1,
-        -40,
-        0,
-        25
-    )
-
-Status.Font =
-    Enum.Font.Gotham
-
-Status.Text =
-    "Ready"
-
-Status.TextColor3 =
-    Color3.fromRGB(
-        255,
-        235,
-        252
-    )
-
-Status.TextSize =
-    12
-
-Status.TextWrapped =
-    true
-
-Status.Parent =
-    Main
-
--- ==================================================
--- DRAG SYSTEM
--- ==================================================
-
-local dragging = false
-
-local dragStart
-
-local startPosition
-
-local function beginDrag(input)
-
-    dragging = true
-
-    dragStart =
-        input.Position
-
-    startPosition =
-        Main.Position
-
-    input.Changed:Connect(function()
-
-        if input.UserInputState
-            == Enum.UserInputState.End then
-
-            dragging = false
-
+--==================================================
+-- LOAD AJJAN ONCE
+--==================================================
+
+local ajjanExecuted = false
+
+local function executeAjjanOnce()
+    if ajjanExecuted then
+        return true
+    end
+
+    -- chống chạy lại trong cùng executor environment
+    if getgenv then
+        local env = getgenv()
+
+        if env.NhatKhanh_AjjanExecuted == true then
+            ajjanExecuted = true
+            return true
         end
 
+        env.NhatKhanh_AjjanExecuted = true
+    end
+
+    local ok, source = httpGet(AJJAN_URL)
+
+    if not ok then
+        warn("[NhatKhanh] Failed to download Ajjan:")
+        warn(tostring(source))
+        return false
+    end
+
+    local fn, compileError = loadstring(source)
+
+    if not fn then
+        warn("[NhatKhanh] Ajjan compile error:")
+        warn(tostring(compileError))
+        return false
+    end
+
+    ajjanExecuted = true
+
+    task.spawn(function()
+        local runOk, runError = pcall(fn)
+
+        if not runOk then
+            warn("[NhatKhanh] Ajjan error:")
+            warn(tostring(runError))
+        end
     end)
+
+    return true
 end
 
-local function updateDrag(input)
+--==================================================
+-- FULL LOAD
+--==================================================
 
-    if not dragging then
-        return
+local function startAfterVerify(sessionToken)
+    Status.Text = "Key verified. Loading..."
+
+    -- Đăng ký teleport trước
+    queueAjjan()
+
+    task.wait(0.3)
+
+    -- Load Hub
+    local hubOk, hubError = loadHub(sessionToken)
+
+    if not hubOk then
+        return false, hubError
     end
 
-    local delta =
-        input.Position
-        - dragStart
+    -- Đợi một chút rồi chạy Ajjan đúng 1 lần
+    task.wait(0.5)
 
-    Main.Position =
-        UDim2.new(
-            startPosition.X.Scale,
-            startPosition.X.Offset
-                + delta.X,
+    executeAjjanOnce()
 
-            startPosition.Y.Scale,
-            startPosition.Y.Offset
-                + delta.Y
-        )
-
+    return true
 end
 
-Title.InputBegan:Connect(function(input)
-
-    if input.UserInputType
-        == Enum.UserInputType.MouseButton1
-
-        or input.UserInputType
-        == Enum.UserInputType.Touch then
-
-        beginDrag(input)
-
-    end
-
-end)
-
-Subtitle.InputBegan:Connect(function(input)
-
-    if input.UserInputType
-        == Enum.UserInputType.MouseButton1
-
-        or input.UserInputType
-        == Enum.UserInputType.Touch then
-
-        beginDrag(input)
-
-    end
-
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-
-    if input.UserInputType
-        == Enum.UserInputType.MouseMovement
-
-        or input.UserInputType
-        == Enum.UserInputType.Touch then
-
-        updateDrag(input)
-
-    end
-
-end)
-
--- ==================================================
--- VERIFY
--- ==================================================
+--==================================================
+-- VERIFY BUTTON
+--==================================================
 
 local busy = false
 
 local function verify()
-
     if busy then
         return
     end
 
-    local key =
-        trim(KeyBox.Text)
+    local key = trim(KeyBox.Text)
 
     if key == "" then
-
-        Status.Text =
-            "Please enter your key."
-
+        Status.Text = "Please enter your key."
         return
     end
 
     busy = true
 
-    VerifyButton.Text =
-        "VERIFYING..."
+    VerifyButton.Text = "VERIFYING..."
+    Status.Text = "Checking your key..."
 
-    Status.Text =
-        "Checking your key..."
-
-    -- ----------------------------------------------
-    -- VERIFY KEY
-    -- ----------------------------------------------
-
-    local ok, result =
-        verifyKey(key)
+    local ok, sessionToken = verifyKey(key)
 
     if not ok then
-
         busy = false
+        VerifyButton.Text = "VERIFY KEY"
 
-        VerifyButton.Text =
-            "VERIFY KEY"
-
-        Status.Text =
-            "❌ "
-            .. tostring(result)
+        Status.Text = "❌ " .. tostring(sessionToken)
 
         return
     end
 
-    -- ----------------------------------------------
-    -- SESSION TOKEN
-    -- ----------------------------------------------
+    -- Chỉ lưu Key sau khi server xác nhận thành công
+    saveKey(key)
 
-    local sessionToken =
-        result.sessionToken
-
-    if not sessionToken
-        or sessionToken == "" then
-
-        busy = false
-
-        VerifyButton.Text =
-            "VERIFY KEY"
-
-        Status.Text =
-            "❌ Server did not return a session token."
-
-        return
-    end
-
-    -- ----------------------------------------------
-    -- LOADING
-    -- ----------------------------------------------
-
-    Status.Text =
-        "✅ Key verified. Loading Blox Hub..."
-
-    VerifyButton.Text =
-        "LOADING..."
+    Status.Text = "✅ Verified. Loading Hub..."
+    VerifyButton.Text = "VERIFIED"
 
     task.wait(0.5)
 
-    -- ----------------------------------------------
-    -- DOWNLOAD + COMPILE + START
-    -- ----------------------------------------------
-
-    local loaded, errorMessage =
-        loadHub(sessionToken)
+    local loaded, errorMessage = startAfterVerify(sessionToken)
 
     if not loaded then
-
         busy = false
+        VerifyButton.Text = "VERIFY KEY"
 
-        VerifyButton.Text =
-            "VERIFY KEY"
-
-        Status.Text =
-            "❌ "
-            .. tostring(errorMessage)
-
-        warn(
-            "[Blox Hub] "
-            .. tostring(errorMessage)
-        )
+        Status.Text = "❌ " .. tostring(errorMessage)
 
         return
     end
 
-    -- ----------------------------------------------
-    -- HUB STARTED
-    -- ----------------------------------------------
-
-    Status.Text =
-        "✅ Blox Hub loaded!"
-
-    task.wait(0.2)
-
-    ScreenGui:Destroy()
-
+    -- Thành công -> đóng Loader
+    if ScreenGui then
+        ScreenGui:Destroy()
+    end
 end
 
--- ==================================================
--- BUTTON
--- ==================================================
+VerifyButton.MouseButton1Click:Connect(verify)
 
-VerifyButton.MouseButton1Click:Connect(
-    verify
-)
-
--- ==================================================
--- ENTER KEY
--- ==================================================
-
-KeyBox.FocusLost:Connect(
-    function(enterPressed)
-
-        if enterPressed then
-            verify()
-        end
-
+KeyBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed then
+        verify()
     end
-)
+end)
 
--- ==================================================
--- AUTO FOCUS
--- ==================================================
+--==================================================
+-- AUTO LOAD SAVED KEY
+--==================================================
 
-KeyBox:CaptureFocus()
+task.spawn(function()
+    task.wait(0.3)
+
+    local savedKey = loadSavedKey()
+
+    if savedKey then
+        KeyBox.Text = savedKey
+        Status.Text = "Saved key detected. Verifying..."
+
+        task.wait(0.5)
+
+        verify()
+    else
+        Status.Text = "Enter your key."
+        KeyBox:CaptureFocus()
+    end
+end)
