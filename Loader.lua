@@ -8,7 +8,6 @@ local SCRIPT_ENDPOINT = API_URL .. "/api/script"
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
-
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -18,7 +17,8 @@ if old then
     old:Destroy()
 end
 
-local function request(url, method, body)
+-- HTTP REQUEST
+local function request(url, method, body, extraHeaders)
     local req =
         (syn and syn.request)
         or (http and http.request)
@@ -26,12 +26,20 @@ local function request(url, method, body)
         or (fluxus and fluxus.request)
 
     if req then
+        local headers = {
+            ["Content-Type"] = "application/json"
+        }
+
+        if extraHeaders then
+            for name, value in pairs(extraHeaders) do
+                headers[name] = value
+            end
+        end
+
         local response = req({
             Url = url,
             Method = method or "GET",
-            Headers = {
-                ["Content-Type"] = "application/json"
-            },
+            Headers = headers,
             Body = body and HttpService:JSONEncode(body) or nil
         })
 
@@ -48,9 +56,11 @@ local function request(url, method, body)
     error("Your executor does not expose an HTTP request function.")
 end
 
+-- GET HWID
 local function getHWID()
     if type(gethwid) == "function" then
         local ok, value = pcall(gethwid)
+
         if ok and value and value ~= "" then
             return tostring(value)
         end
@@ -58,6 +68,7 @@ local function getHWID()
 
     if type(get_hwid) == "function" then
         local ok, value = pcall(get_hwid)
+
         if ok and value and value ~= "" then
             return tostring(value)
         end
@@ -74,10 +85,14 @@ local function getHWID()
     return nil
 end
 
+-- TRIM
 local function trim(value)
-    return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return tostring(value or "")
+        :gsub("^%s+", "")
+        :gsub("%s+$", "")
 end
 
+-- VERIFY KEY
 local function verifyKey(key)
     local hwid = getHWID()
 
@@ -86,10 +101,14 @@ local function verifyKey(key)
     end
 
     local ok, response = pcall(function()
-        return request(API_URL .. "/api/verify", "POST", {
-            key = key,
-            hwid = hwid
-        })
+        return request(
+            API_URL .. "/api/verify",
+            "POST",
+            {
+                key = key,
+                hwid = hwid
+            }
+        )
     end)
 
     if not ok or not response then
@@ -108,15 +127,27 @@ local function verifyKey(key)
     end
 
     if status ~= 200 or not data.valid then
-        return false, tostring(data.message or "Key verification failed.")
+        return false, tostring(
+            data.message or "Key verification failed."
+        )
     end
 
+    -- Return the complete response.
+    -- This contains sessionToken from the API.
     return true, data
 end
 
-local function loadHub()
+-- LOAD HUB
+local function loadHub(sessionToken)
     local ok, response = pcall(function()
-        return request(SCRIPT_ENDPOINT, "GET")
+        return request(
+            SCRIPT_ENDPOINT,
+            "GET",
+            nil,
+            {
+                ["X-Session-Token"] = sessionToken
+            }
+        )
     end)
 
     if not ok or not response then
@@ -124,6 +155,7 @@ local function loadHub()
     end
 
     local status = tonumber(response.StatusCode) or 0
+
     if status < 200 or status >= 400 then
         return false, "The Blox Hub script request failed."
     end
@@ -137,13 +169,17 @@ local function loadHub()
     local fn, compileError = loadstring(source)
 
     if not fn then
-        return false, "The returned Blox Hub source could not be compiled: " .. tostring(compileError)
+        return false,
+            "The returned Blox Hub source could not be compiled: "
+            .. tostring(compileError)
     end
 
     local runOk, runError = pcall(fn)
 
     if not runOk then
-        return false, "Blox Hub failed to start: " .. tostring(runError)
+        return false,
+            "Blox Hub failed to start: "
+            .. tostring(runError)
     end
 
     return true
@@ -239,7 +275,7 @@ Status.TextSize = 12
 Status.TextWrapped = true
 Status.Parent = Main
 
--- Dragging
+-- DRAGGING
 local dragging = false
 local dragStart
 local startPosition
@@ -257,7 +293,9 @@ local function beginDrag(input)
 end
 
 local function updateDrag(input)
-    if not dragging then return end
+    if not dragging then
+        return
+    end
 
     local delta = input.Position - dragStart
 
@@ -272,6 +310,7 @@ end
 Title.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
+
         beginDrag(input)
     end
 end)
@@ -279,6 +318,7 @@ end)
 Subtitle.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
+
         beginDrag(input)
     end
 end)
@@ -286,14 +326,18 @@ end)
 UserInputService.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement
         or input.UserInputType == Enum.UserInputType.Touch then
+
         updateDrag(input)
     end
 end)
 
+-- VERIFY BUTTON
 local busy = false
 
 local function verify()
-    if busy then return end
+    if busy then
+        return
+    end
 
     local key = trim(KeyBox.Text)
 
@@ -303,6 +347,7 @@ local function verify()
     end
 
     busy = true
+
     VerifyButton.Text = "VERIFYING..."
     Status.Text = "Checking your key..."
 
@@ -310,8 +355,22 @@ local function verify()
 
     if not ok then
         busy = false
+
         VerifyButton.Text = "VERIFY KEY"
         Status.Text = "❌ " .. tostring(result)
+
+        return
+    end
+
+    -- result contains sessionToken returned by /api/verify
+    local sessionToken = result.sessionToken
+
+    if not sessionToken or sessionToken == "" then
+        busy = false
+
+        VerifyButton.Text = "VERIFY KEY"
+        Status.Text = "❌ Server did not return a session token."
+
         return
     end
 
@@ -322,7 +381,8 @@ local function verify()
 
     ScreenGui:Destroy()
 
-    local loaded, errorMessage = loadHub()
+    -- Send sessionToken to /api/script
+    local loaded, errorMessage = loadHub(sessionToken)
 
     if not loaded then
         warn("[Blox Hub] " .. tostring(errorMessage))
