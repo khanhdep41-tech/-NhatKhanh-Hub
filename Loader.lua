@@ -17,14 +17,15 @@ end
 -- HTTP REQUEST
 --------------------------------------------------
 
-local function request(url, method, body, extraHeaders)
-    local req =
-        (syn and syn.request)
-        or (http and http.request)
-        or request
-        or (fluxus and fluxus.request)
+local executorRequest =
+    (syn and syn.request)
+    or (http and http.request)
+    or (fluxus and fluxus.request)
+    or (getgenv and getgenv().request)
+    or (_G and rawget(_G, "request"))
 
-    if req then
+local function request(url, method, body, extraHeaders)
+    if executorRequest then
         local headers = {
             ["Content-Type"] = "application/json"
         }
@@ -35,14 +36,12 @@ local function request(url, method, body, extraHeaders)
             end
         end
 
-        local response = req({
+        return executorRequest({
             Url = url,
             Method = method or "GET",
             Headers = headers,
             Body = body and HttpService:JSONEncode(body) or nil
         })
-
-        return response
     end
 
     if method == "GET" then
@@ -130,7 +129,7 @@ local function verifyKey(key)
         return HttpService:JSONDecode(body)
     end)
 
-    if not decodedOk then
+    if not decodedOk or type(data) ~= "table" then
         return false, "The server returned an invalid response."
     end
 
@@ -330,7 +329,6 @@ end
 Title.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-
         beginDrag(input)
     end
 end)
@@ -338,7 +336,6 @@ end)
 Subtitle.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-
         beginDrag(input)
     end
 end)
@@ -346,7 +343,6 @@ end)
 UserInputService.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement
         or input.UserInputType == Enum.UserInputType.Touch then
-
         updateDrag(input)
     end
 end)
@@ -378,10 +374,8 @@ local function verify()
 
     if not ok then
         busy = false
-
         VerifyButton.Text = "VERIFY KEY"
         Status.Text = "❌ " .. tostring(result)
-
         return
     end
 
@@ -389,25 +383,28 @@ local function verify()
 
     if not sessionToken or sessionToken == "" then
         busy = false
-
         VerifyButton.Text = "VERIFY KEY"
         Status.Text = "❌ Server did not return a session token."
-
         return
     end
 
     Status.Text = "✅ Key verified. Loading Blox Hub..."
-    VerifyButton.Text = "VERIFIED"
+    VerifyButton.Text = "LOADING..."
 
     task.wait(0.5)
 
-    ScreenGui:Destroy()
-
     local loaded, errorMessage = loadHub(sessionToken)
 
-    if not loaded then
-        warn("[Blox Hub] " .. tostring(errorMessage))
+    if loaded then
+        ScreenGui:Destroy()
+        return
     end
+
+    busy = false
+    VerifyButton.Text = "VERIFY KEY"
+    Status.Text = "❌ " .. tostring(errorMessage)
+
+    warn("[Blox Hub] " .. tostring(errorMessage))
 end
 
 VerifyButton.MouseButton1Click:Connect(verify)
@@ -419,3 +416,4 @@ KeyBox.FocusLost:Connect(function(enterPressed)
 end)
 
 KeyBox:CaptureFocus()
+   
