@@ -1,7 +1,8 @@
 --==================================================
 -- NHATKHANH HUB LOADER
--- Key + HWID + Auto Save Key + Auto Verify
--- Hub Loader + Ajjan Auto Re-Execute
+-- Key + HWID + PostgreSQL API
+-- Load protected/hub.lua
+-- Ajjan chỉ dùng cho Auto Re-Execute sau Teleport
 --==================================================
 
 if not game:IsLoaded() then
@@ -20,6 +21,7 @@ local SCRIPT_ENDPOINT = API_URL .. "/api/script"
 local AJJAN_URL =
     "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
 
+-- Nếu muốn nhớ Key giữa các lần mở game
 local KEY_FILE = "NhatKhanh_Hub_Key.txt"
 
 --==================================================
@@ -27,12 +29,13 @@ local KEY_FILE = "NhatKhanh_Hub_Key.txt"
 --==================================================
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local RbxAnalyticsService = game:GetService("RbxAnalyticsService")
 
 local LocalPlayer = Players.LocalPlayer
 
 --==================================================
--- UTIL
+-- UTILITY
 --==================================================
 
 local function trim(value)
@@ -43,22 +46,8 @@ local function trim(value)
     return value:match("^%s*(.-)%s*$") or ""
 end
 
-local function safeCall(fn, ...)
-    local args = {...}
-
-    local ok, result = pcall(function()
-        return fn(table.unpack(args))
-    end)
-
-    if ok then
-        return true, result
-    end
-
-    return false, result
-end
-
 --==================================================
--- REQUEST FUNCTION
+-- REQUEST
 --==================================================
 
 local executorRequest =
@@ -68,15 +57,17 @@ local executorRequest =
     or (getgenv and getgenv().request)
     or (_G and rawget(_G, "request"))
 
-local function request(options)
-    if type(executorRequest) == "function" then
-        local ok, response = pcall(function()
-            return executorRequest(options)
-        end)
+local function makeRequest(options)
+    if type(executorRequest) ~= "function" then
+        return nil
+    end
 
-        if ok and response then
-            return response
-        end
+    local ok, response = pcall(function()
+        return executorRequest(options)
+    end)
+
+    if ok then
+        return response
     end
 
     return nil
@@ -86,45 +77,45 @@ end
 -- GET
 --==================================================
 
-local function httpGet(url)
-    local response = request({
+local function httpGet(url, headers)
+    local response = makeRequest({
         Url = url,
-        Method = "GET"
+        Method = "GET",
+        Headers = headers or {}
     })
 
     if response then
         local body = response.Body or response.body
 
         if type(body) == "string" and body ~= "" then
-            return true, body
+            return true, body, response
         end
     end
 
-    local ok, result = pcall(function()
-        return game:HttpGet(url)
-    end)
+    -- Fallback cho GET không có header
+    if not headers or next(headers) == nil then
+        local ok, result = pcall(function()
+            return game:HttpGet(url)
+        end)
 
-    if ok and type(result) == "string" and result ~= "" then
-        return true, result
+        if ok and type(result) == "string" and result ~= "" then
+            return true, result, nil
+        end
     end
 
-    return false, "HTTP GET failed."
+    return false, "HTTP GET failed.", response
 end
 
 --==================================================
 -- POST
 --==================================================
 
-local HttpService = game:GetService("HttpService")
-
 local function httpPost(url, data)
     if type(executorRequest) ~= "function" then
         return false, "Executor does not support HTTP POST."
     end
 
-    local encoded
-
-    local encodeOk, encodeResult = pcall(function()
+    local encodeOk, encoded = pcall(function()
         return HttpService:JSONEncode(data)
     end)
 
@@ -132,14 +123,14 @@ local function httpPost(url, data)
         return false, "Failed to encode request."
     end
 
-    encoded = encodeResult
-
-    local response = request({
+    local response = makeRequest({
         Url = url,
         Method = "POST",
+
         Headers = {
             ["Content-Type"] = "application/json"
         },
+
         Body = encoded
     })
 
@@ -147,14 +138,14 @@ local function httpPost(url, data)
         return false, "HTTP POST failed."
     end
 
+    local body =
+        response.Body
+        or response.body
+
     local statusCode =
         response.StatusCode
         or response.status_code
         or response.Status
-
-    local body =
-        response.Body
-        or response.body
 
     if type(body) ~= "string" then
         body = ""
@@ -163,12 +154,15 @@ local function httpPost(url, data)
     if tonumber(statusCode) and tonumber(statusCode) >= 400 then
         local message = body
 
-        local decodeOk, decoded = pcall(function()
+        local ok, decoded = pcall(function()
             return HttpService:JSONDecode(body)
         end)
 
-        if decodeOk and type(decoded) == "table" then
-            message = decoded.message or decoded.error or body
+        if ok and type(decoded) == "table" then
+            message =
+                decoded.message
+                or decoded.error
+                or body
         end
 
         return false, tostring(message)
@@ -186,32 +180,20 @@ end
 --==================================================
 
 local function getHWID()
-    local possibleFunctions = {
-        "gethwid",
-        "get_hwid"
-    }
 
-    for _, name in ipairs(possibleFunctions) do
-        local fn = _G[name]
+    if type(gethwid) == "function" then
+        local ok, result = pcall(gethwid)
 
-        if type(fn) == "function" then
-            local ok, result = pcall(fn)
-
-            if ok and type(result) == "string" and result ~= "" then
-                return result
-            end
+        if ok and type(result) == "string" and result ~= "" then
+            return result
         end
+    end
 
-        if getgenv then
-            local env = getgenv()
+    if type(get_hwid) == "function" then
+        local ok, result = pcall(get_hwid)
 
-            if env and type(env[name]) == "function" then
-                local ok, result = pcall(env[name])
-
-                if ok and type(result) == "string" and result ~= "" then
-                    return result
-                end
-            end
+        if ok and type(result) == "string" and result ~= "" then
+            return result
         end
     end
 
@@ -227,17 +209,18 @@ local function getHWID()
 end
 
 --==================================================
--- KEY FILE
+-- KEY SAVE
 --==================================================
 
 local function saveKey(key)
-    key = trim(key)
 
-    if key == "" then
+    if type(writefile) ~= "function" then
         return false
     end
 
-    if type(writefile) ~= "function" then
+    key = trim(key)
+
+    if key == "" then
         return false
     end
 
@@ -249,6 +232,7 @@ local function saveKey(key)
 end
 
 local function loadSavedKey()
+
     if type(isfile) ~= "function" then
         return nil
     end
@@ -265,7 +249,7 @@ local function loadSavedKey()
         return nil
     end
 
-    local readOk, content = pcall(function()
+    local readOk, data = pcall(function()
         return readfile(KEY_FILE)
     end)
 
@@ -273,23 +257,13 @@ local function loadSavedKey()
         return nil
     end
 
-    content = trim(content)
+    data = trim(data)
 
-    if content == "" then
+    if data == "" then
         return nil
     end
 
-    return content
-end
-
-local function deleteSavedKey()
-    if type(delfile) ~= "function" then
-        return
-    end
-
-    pcall(function()
-        delfile(KEY_FILE)
-    end)
+    return data
 end
 
 --==================================================
@@ -297,6 +271,7 @@ end
 --==================================================
 
 local ScreenGui = Instance.new("ScreenGui")
+
 ScreenGui.Name = "NhatKhanh_Loader"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
@@ -311,86 +286,135 @@ if not ScreenGui.Parent then
 end
 
 local Main = Instance.new("Frame")
-Main.Size = UDim2.fromOffset(360, 235)
-Main.Position = UDim2.new(0.5, -180, 0.5, -117)
+
+Main.Size = UDim2.fromOffset(360, 230)
+Main.Position = UDim2.new(0.5, -180, 0.5, -115)
+
 Main.BackgroundColor3 = Color3.fromRGB(30, 10, 27)
 Main.BorderSizePixel = 0
 Main.Parent = ScreenGui
 
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 14)
+Instance.new("UICorner", Main).CornerRadius =
+    UDim.new(0, 14)
 
 local Stroke = Instance.new("UIStroke", Main)
+
 Stroke.Color = Color3.fromRGB(245, 65, 155)
 Stroke.Thickness = 1.5
 
 local Title = Instance.new("TextLabel")
+
 Title.Size = UDim2.new(1, -30, 0, 40)
 Title.Position = UDim2.fromOffset(15, 12)
+
 Title.BackgroundTransparency = 1
 Title.Text = "NHATKHANH HUB"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+Title.TextColor3 =
+    Color3.fromRGB(255, 255, 255)
+
 Title.Font = Enum.Font.GothamBlack
 Title.TextSize = 22
+
 Title.Parent = Main
 
 local SubTitle = Instance.new("TextLabel")
-SubTitle.Size = UDim2.new(1, -30, 0, 25)
+
+SubTitle.Size = UDim2.new(1, -30, 0, 22)
 SubTitle.Position = UDim2.fromOffset(15, 48)
+
 SubTitle.BackgroundTransparency = 1
 SubTitle.Text = "Key Verification"
-SubTitle.TextColor3 = Color3.fromRGB(255, 145, 210)
+
+SubTitle.TextColor3 =
+    Color3.fromRGB(255, 145, 210)
+
 SubTitle.Font = Enum.Font.Gotham
 SubTitle.TextSize = 12
+
 SubTitle.Parent = Main
 
 local KeyBox = Instance.new("TextBox")
+
 KeyBox.Size = UDim2.new(1, -30, 0, 42)
-KeyBox.Position = UDim2.fromOffset(15, 82)
-KeyBox.BackgroundColor3 = Color3.fromRGB(50, 20, 45)
+KeyBox.Position = UDim2.fromOffset(15, 80)
+
+KeyBox.BackgroundColor3 =
+    Color3.fromRGB(50, 20, 45)
+
 KeyBox.BorderSizePixel = 0
-KeyBox.PlaceholderText = "Enter your key..."
-KeyBox.PlaceholderColor3 = Color3.fromRGB(170, 150, 165)
+
+KeyBox.PlaceholderText = "Nhập Key..."
+KeyBox.PlaceholderColor3 =
+    Color3.fromRGB(170, 150, 165)
+
 KeyBox.Text = ""
-KeyBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+KeyBox.TextColor3 =
+    Color3.fromRGB(255, 255, 255)
+
 KeyBox.Font = Enum.Font.Gotham
 KeyBox.TextSize = 14
+
 KeyBox.ClearTextOnFocus = false
+
 KeyBox.Parent = Main
 
-Instance.new("UICorner", KeyBox).CornerRadius = UDim.new(0, 9)
+Instance.new("UICorner", KeyBox).CornerRadius =
+    UDim.new(0, 9)
 
 local VerifyButton = Instance.new("TextButton")
+
 VerifyButton.Size = UDim2.new(1, -30, 0, 42)
-VerifyButton.Position = UDim2.fromOffset(15, 132)
-VerifyButton.BackgroundColor3 = Color3.fromRGB(195, 38, 125)
+VerifyButton.Position = UDim2.fromOffset(15, 130)
+
+VerifyButton.BackgroundColor3 =
+    Color3.fromRGB(195, 38, 125)
+
 VerifyButton.BorderSizePixel = 0
+
 VerifyButton.Text = "VERIFY KEY"
-VerifyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+VerifyButton.TextColor3 =
+    Color3.fromRGB(255, 255, 255)
+
 VerifyButton.Font = Enum.Font.GothamBold
 VerifyButton.TextSize = 14
+
 VerifyButton.Parent = Main
 
-Instance.new("UICorner", VerifyButton).CornerRadius = UDim.new(0, 9)
+Instance.new("UICorner", VerifyButton).CornerRadius =
+    UDim.new(0, 9)
 
 local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, -30, 0, 42)
+
+Status.Size = UDim2.new(1, -30, 0, 40)
 Status.Position = UDim2.fromOffset(15, 180)
+
 Status.BackgroundTransparency = 1
-Status.Text = "Enter your key."
-Status.TextColor3 = Color3.fromRGB(220, 200, 215)
+
+Status.Text = "Nhập Key để tiếp tục."
+
+Status.TextColor3 =
+    Color3.fromRGB(220, 200, 215)
+
 Status.Font = Enum.Font.Gotham
 Status.TextSize = 11
+
 Status.TextWrapped = true
+
 Status.Parent = Main
 
 --==================================================
--- AJJAN TELEPORT
+-- AJJAN RE-EXECUTE
+-- CHỈ LẤY CHỨC NĂNG NÀY
 --==================================================
 
-local ajjanQueued = false
+local teleportQueued = false
 
-local function queueAjjan()
-    if ajjanQueued then
+local function queueAjjanForTeleport()
+
+    if teleportQueued then
         return true
     end
 
@@ -398,59 +422,67 @@ local function queueAjjan()
         task.wait(2)
 
         pcall(function()
-            local source = "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
 
-            local response = game:HttpGet(source)
+            local source =
+                "https://raw.githubusercontent.com/khanhdep41-tech/-NhatKhanh-Hub/refs/heads/main/Ajjan.lua"
 
-            if type(response) == "string" and response ~= "" then
-                local fn, err = loadstring(response)
+            local response =
+                game:HttpGet(source)
+
+            if type(response) == "string"
+                and response ~= "" then
+
+                local fn, err =
+                    loadstring(response)
 
                 if fn then
                     fn()
                 else
-                    warn("[NhatKhanh] Ajjan compile error: " .. tostring(err))
+                    warn(
+                        "[NhatKhanh] Ajjan compile error: "
+                        .. tostring(err)
+                    )
                 end
             end
         end)
     ]]
 
-    local queueFunctions = {
-        function()
-            if type(queue_on_teleport) == "function" then
-                queue_on_teleport(queuedCode)
-                return true
-            end
-        end,
+    -- queue_on_teleport
+    if type(queue_on_teleport) == "function" then
 
-        function()
-            if type(queueonteleport) == "function" then
-                queueonteleport(queuedCode)
-                return true
-            end
-        end,
+        local ok = pcall(function()
+            queue_on_teleport(queuedCode)
+        end)
 
-        function()
-            if type(queue_on_tp) == "function" then
-                queue_on_tp(queuedCode)
-                return true
-            end
-        end,
-
-        function()
-            if type(syn) == "table"
-                and type(syn.queue_on_teleport) == "function" then
-
-                syn.queue_on_teleport(queuedCode)
-                return true
-            end
+        if ok then
+            teleportQueued = true
+            return true
         end
-    }
+    end
 
-    for _, fn in ipairs(queueFunctions) do
-        local ok, result = pcall(fn)
+    -- queueonteleport
+    if type(queueonteleport) == "function" then
 
-        if ok and result == true then
-            ajjanQueued = true
+        local ok = pcall(function()
+            queueonteleport(queuedCode)
+        end)
+
+        if ok then
+            teleportQueued = true
+            return true
+        end
+    end
+
+    -- syn.queue_on_teleport
+    if type(syn) == "table"
+        and type(syn.queue_on_teleport) == "function" then
+
+        local ok = pcall(function()
+            syn.queue_on_teleport(queuedCode)
+        end)
+
+        if ok then
+            teleportQueued = true
             return true
         end
     end
@@ -463,73 +495,96 @@ end
 --==================================================
 
 local function verifyKey(key)
+
     key = trim(key)
 
     if key == "" then
-        return false, "Key is empty."
+        return false, "Key không được để trống."
     end
 
     local hwid = getHWID()
 
     if not hwid then
-        return false, "Could not get HWID."
+        return false, "Không lấy được HWID."
     end
 
-    Status.Text = "Checking Key + HWID..."
+    Status.Text = "Đang kiểm tra Key + HWID..."
 
-    local ok, body = httpPost(VERIFY_ENDPOINT, {
-        key = key,
-        hwid = hwid
-    })
+    local ok, body =
+        httpPost(
+            VERIFY_ENDPOINT,
+            {
+                key = key,
+                hwid = hwid
+            }
+        )
 
     if not ok then
         return false, body
     end
 
-    local decodeOk, data = pcall(function()
-        return HttpService:JSONDecode(body)
-    end)
+    local decodeOk, data =
+        pcall(function()
+            return HttpService:JSONDecode(body)
+        end)
 
-    if not decodeOk or type(data) ~= "table" then
-        return false, "Invalid server response."
+    if not decodeOk
+        or type(data) ~= "table" then
+
+        return false,
+            "Server trả về dữ liệu không hợp lệ."
     end
 
     if data.valid ~= true then
-        return false, data.message or "Key verification failed."
+
+        return false,
+            data.message
+            or "Key không hợp lệ."
     end
 
-    if type(data.sessionToken) ~= "string"
-        or data.sessionToken == "" then
+    local sessionToken =
+        data.sessionToken
 
-        return false, "Server did not return a session token."
-    end
-
-    return true, data.sessionToken
-end
-
---==================================================
--- LOAD HUB
---==================================================
-
-local function loadHub(sessionToken)
     if type(sessionToken) ~= "string"
         or sessionToken == "" then
 
-        return false, "Missing session token."
+        return false,
+            "Server không trả Session Token."
     end
 
-    Status.Text = "Downloading NhatKhanh Hub..."
+    return true, sessionToken
+end
 
-    local response = request({
-        Url = SCRIPT_ENDPOINT,
-        Method = "GET",
-        Headers = {
-            ["X-Session-Token"] = sessionToken
-        }
-    })
+--==================================================
+-- LOAD HUB.LUA
+--==================================================
+
+local function loadHub(sessionToken)
+
+    if type(sessionToken) ~= "string"
+        or sessionToken == "" then
+
+        return false,
+            "Missing session token."
+    end
+
+    Status.Text =
+        "Đang tải hub.lua..."
+
+    local response =
+        makeRequest({
+            Url = SCRIPT_ENDPOINT,
+            Method = "GET",
+
+            Headers = {
+                ["X-Session-Token"] =
+                    sessionToken
+            }
+        })
 
     if not response then
-        return false, "Failed to request Hub."
+        return false,
+            "Không thể kết nối /api/script."
     end
 
     local statusCode =
@@ -537,33 +592,53 @@ local function loadHub(sessionToken)
         or response.status_code
         or response.Status
 
-    if tonumber(statusCode) and tonumber(statusCode) >= 400 then
-        return false, "Hub request rejected by server."
+    if tonumber(statusCode)
+        and tonumber(statusCode) >= 400 then
+
+        return false,
+            "Server từ chối tải Hub."
     end
 
     local source =
         response.Body
         or response.body
 
-    if type(source) ~= "string" or source == "" then
-        return false, "Hub source is empty."
+    if type(source) ~= "string"
+        or source == "" then
+
+        return false,
+            "hub.lua rỗng."
     end
 
-    Status.Text = "Starting NhatKhanh Hub..."
+    Status.Text =
+        "Đang khởi động Hub..."
 
-    local fn, compileError = loadstring(source)
+    local fn, compileError =
+        loadstring(source)
 
     if not fn then
-        return false, "Hub compile error: " .. tostring(compileError)
+
+        return false,
+            "Hub compile error: "
+            .. tostring(compileError)
     end
 
-    -- Hub chạy riêng để Loader không bị treo
-    task.spawn(function()
-        local runOk, runError = pcall(fn)
+    --==================================================
+    -- CHẠY HUB CỦA BẠN
+    --==================================================
 
-        if not runOk then
-            warn("[NhatKhanh] Hub error:")
-            warn(tostring(runError))
+    task.spawn(function()
+
+        local ok, err =
+            pcall(fn)
+
+        if not ok then
+
+            warn(
+                "[Blox Hub] Hub error:"
+            )
+
+            warn(tostring(err))
         end
     end)
 
@@ -571,170 +646,147 @@ local function loadHub(sessionToken)
 end
 
 --==================================================
--- LOAD AJJAN ONCE
---==================================================
-
-local ajjanExecuted = false
-
-local function executeAjjanOnce()
-    if ajjanExecuted then
-        return true
-    end
-
-    -- chống chạy lại trong cùng executor environment
-    if getgenv then
-        local env = getgenv()
-
-        if env.NhatKhanh_AjjanExecuted == true then
-            ajjanExecuted = true
-            return true
-        end
-
-        env.NhatKhanh_AjjanExecuted = true
-    end
-
-    local ok, source = httpGet(AJJAN_URL)
-
-    if not ok then
-        warn("[NhatKhanh] Failed to download Ajjan:")
-        warn(tostring(source))
-        return false
-    end
-
-    local fn, compileError = loadstring(source)
-
-    if not fn then
-        warn("[NhatKhanh] Ajjan compile error:")
-        warn(tostring(compileError))
-        return false
-    end
-
-    ajjanExecuted = true
-
-    task.spawn(function()
-        local runOk, runError = pcall(fn)
-
-        if not runOk then
-            warn("[NhatKhanh] Ajjan error:")
-            warn(tostring(runError))
-        end
-    end)
-
-    return true
-end
-
---==================================================
--- FULL LOAD
---==================================================
-
-local function startAfterVerify(sessionToken)
-    Status.Text = "Key verified. Loading..."
-
-    -- Đăng ký teleport trước
-    queueAjjan()
-
-    task.wait(0.3)
-
-    -- Load Hub
-    local hubOk, hubError = loadHub(sessionToken)
-
-    if not hubOk then
-        return false, hubError
-    end
-
-    -- Đợi một chút rồi chạy Ajjan đúng 1 lần
-    task.wait(0.5)
-
-    executeAjjanOnce()
-
-    return true
-end
-
---==================================================
--- VERIFY BUTTON
+-- MAIN VERIFY
 --==================================================
 
 local busy = false
 
 local function verify()
+
     if busy then
         return
     end
 
-    local key = trim(KeyBox.Text)
+    local key =
+        trim(KeyBox.Text)
 
     if key == "" then
-        Status.Text = "Please enter your key."
+
+        Status.Text =
+            "❌ Vui lòng nhập Key."
+
         return
     end
 
     busy = true
 
-    VerifyButton.Text = "VERIFYING..."
-    Status.Text = "Checking your key..."
+    VerifyButton.Text =
+        "VERIFYING..."
 
-    local ok, sessionToken = verifyKey(key)
+    Status.Text =
+        "Đang xác thực Key..."
+
+    --==================================================
+    -- VERIFY
+    --==================================================
+
+    local ok, sessionToken =
+        verifyKey(key)
 
     if not ok then
-        busy = false
-        VerifyButton.Text = "VERIFY KEY"
 
-        Status.Text = "❌ " .. tostring(sessionToken)
+        busy = false
+
+        VerifyButton.Text =
+            "VERIFY KEY"
+
+        Status.Text =
+            "❌ " .. tostring(sessionToken)
 
         return
     end
 
-    -- Chỉ lưu Key sau khi server xác nhận thành công
+    --==================================================
+    -- LƯU KEY LOCAL
+    --==================================================
+
     saveKey(key)
 
-    Status.Text = "✅ Verified. Loading Hub..."
-    VerifyButton.Text = "VERIFIED"
+    Status.Text =
+        "✅ Key hợp lệ."
 
-    task.wait(0.5)
+    task.wait(0.3)
 
-    local loaded, errorMessage = startAfterVerify(sessionToken)
+    --==================================================
+    -- CHỈ ĐĂNG KÝ AJJAN RE-EXECUTE
+    --==================================================
+
+    queueAjjanForTeleport()
+
+    --==================================================
+    -- LOAD HUB.LUA
+    --==================================================
+
+    local loaded, errorMessage =
+        loadHub(sessionToken)
 
     if not loaded then
-        busy = false
-        VerifyButton.Text = "VERIFY KEY"
 
-        Status.Text = "❌ " .. tostring(errorMessage)
+        busy = false
+
+        VerifyButton.Text =
+            "VERIFY KEY"
+
+        Status.Text =
+            "❌ " .. tostring(errorMessage)
 
         return
     end
 
-    -- Thành công -> đóng Loader
-    if ScreenGui then
-        ScreenGui:Destroy()
-    end
+    --==================================================
+    -- SUCCESS
+    --==================================================
+
+    Status.Text =
+        "✅ Hub loaded."
+
+    task.wait(0.2)
+
+    ScreenGui:Destroy()
 end
 
-VerifyButton.MouseButton1Click:Connect(verify)
+--==================================================
+-- BUTTON
+--==================================================
 
-KeyBox.FocusLost:Connect(function(enterPressed)
-    if enterPressed then
-        verify()
+VerifyButton.MouseButton1Click:Connect(
+    verify
+)
+
+KeyBox.FocusLost:Connect(
+    function(enterPressed)
+
+        if enterPressed then
+            verify()
+        end
     end
-end)
+)
 
 --==================================================
 -- AUTO LOAD SAVED KEY
 --==================================================
 
 task.spawn(function()
+
     task.wait(0.3)
 
-    local savedKey = loadSavedKey()
+    local savedKey =
+        loadSavedKey()
 
     if savedKey then
-        KeyBox.Text = savedKey
-        Status.Text = "Saved key detected. Verifying..."
+
+        KeyBox.Text =
+            savedKey
+
+        Status.Text =
+            "Đã tìm thấy Key đã lưu. Đang verify..."
 
         task.wait(0.5)
 
         verify()
+
     else
-        Status.Text = "Enter your key."
+
         KeyBox:CaptureFocus()
     end
 end)
