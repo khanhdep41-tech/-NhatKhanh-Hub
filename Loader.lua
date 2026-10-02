@@ -1,23 +1,22 @@
--- Blox Hub - Key Loader with GUI
--- Replace API_URL with your deployed API URL.
--- Users enter their key in the GUI instead of editing getgenv().BloxHubKey.
-
 local API_URL = "https://bloxhub-api.onrender.com"
 local SCRIPT_ENDPOINT = API_URL .. "/api/script"
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
+
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Remove an older copy if the loader is run again.
 local old = PlayerGui:FindFirstChild("BloxHubKeySystem")
 if old then
     old:Destroy()
 end
 
+--------------------------------------------------
 -- HTTP REQUEST
+--------------------------------------------------
+
 local function request(url, method, body, extraHeaders)
     local req =
         (syn and syn.request)
@@ -56,7 +55,10 @@ local function request(url, method, body, extraHeaders)
     error("Your executor does not expose an HTTP request function.")
 end
 
+--------------------------------------------------
 -- GET HWID
+--------------------------------------------------
+
 local function getHWID()
     if type(gethwid) == "function" then
         local ok, value = pcall(gethwid)
@@ -85,14 +87,20 @@ local function getHWID()
     return nil
 end
 
+--------------------------------------------------
 -- TRIM
+--------------------------------------------------
+
 local function trim(value)
     return tostring(value or "")
         :gsub("^%s+", "")
         :gsub("%s+$", "")
 end
 
+--------------------------------------------------
 -- VERIFY KEY
+--------------------------------------------------
+
 local function verifyKey(key)
     local hwid = getHWID()
 
@@ -132,13 +140,18 @@ local function verifyKey(key)
         )
     end
 
-    -- Return the complete response.
-    -- This contains sessionToken from the API.
     return true, data
 end
 
+--------------------------------------------------
 -- LOAD HUB
+--------------------------------------------------
+
 local function loadHub(sessionToken)
+    if not sessionToken or sessionToken == "" then
+        return false, "Missing session token."
+    end
+
     local ok, response = pcall(function()
         return request(
             SCRIPT_ENDPOINT,
@@ -157,7 +170,9 @@ local function loadHub(sessionToken)
     local status = tonumber(response.StatusCode) or 0
 
     if status < 200 or status >= 400 then
-        return false, "The Blox Hub script request failed."
+        return false,
+            "The Blox Hub script request failed. HTTP "
+            .. tostring(status)
     end
 
     local source = response.Body
@@ -185,7 +200,10 @@ local function loadHub(sessionToken)
     return true
 end
 
+--------------------------------------------------
 -- GUI
+--------------------------------------------------
+
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "BloxHubKeySystem"
 ScreenGui.ResetOnSpawn = false
@@ -234,10 +252,9 @@ KeyBox.Name = "KeyBox"
 KeyBox.Position = UDim2.fromOffset(25, 88)
 KeyBox.Size = UDim2.new(1, -50, 0, 45)
 KeyBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-KeyBox.BackgroundTransparency = 0
 KeyBox.ClearTextOnFocus = false
 KeyBox.Font = Enum.Font.Gotham
-KeyBox.PlaceholderText = "BLX-XXXXXXXX-XXXXXXXX-XXXXXXXX"
+KeyBox.PlaceholderText = "Enter your key"
 KeyBox.Text = ""
 KeyBox.TextColor3 = Color3.fromRGB(35, 20, 32)
 KeyBox.PlaceholderColor3 = Color3.fromRGB(150, 125, 145)
@@ -275,7 +292,10 @@ Status.TextSize = 12
 Status.TextWrapped = true
 Status.Parent = Main
 
--- DRAGGING
+--------------------------------------------------
+-- DRAG
+--------------------------------------------------
+
 local dragging = false
 local dragStart
 local startPosition
@@ -331,7 +351,10 @@ UserInputService.InputChanged:Connect(function(input)
     end
 end)
 
--- VERIFY BUTTON
+--------------------------------------------------
+-- VERIFY
+--------------------------------------------------
+
 local busy = false
 
 local function verify()
@@ -362,7 +385,6 @@ local function verify()
         return
     end
 
-    -- result contains sessionToken returned by /api/verify
     local sessionToken = result.sessionToken
 
     if not sessionToken or sessionToken == "" then
@@ -381,7 +403,6 @@ local function verify()
 
     ScreenGui:Destroy()
 
-    -- Send sessionToken to /api/script
     local loaded, errorMessage = loadHub(sessionToken)
 
     if not loaded then
