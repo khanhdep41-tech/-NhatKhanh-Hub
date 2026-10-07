@@ -1,4 +1,4 @@
---// Nhat Khan Hub
+--// Nhat Khanh Hub
 --// Full GUI + server hopping + post-teleport reexecution
 --// Target: public server with ONE EXISTING player.
 --// Auto hopping starts OFF.
@@ -93,7 +93,7 @@ local function makeText(className, y, height, textValue, size, color)
 end
 
 local title = makeText(
-    "TextLabel", 8, 28, "Nhat Khan Hub", 18,
+    "TextLabel", 8, 28, "Nhat Khanh ", 18,
     Color3.fromRGB(190, 45, 150)
 )
 title.BackgroundTransparency = 1
