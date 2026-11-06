@@ -1,0 +1,1691 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Enabled = true
+local Returning = false
+local WaitingNextPrompt = false
+
+local AntiRagdollEnabled = true
+local AntiRagdollResetCooldown = 0
+local AntiRagdollConnection = nil
+
+local AntiTrapEnabled = true
+local AntiTrapRan = false
+
+local DROP_WAIT = 0.4
+local BASE_X = 530
+local STEP_TARGET_X = 600
+local STEP_TARGET_Z = -420
+local STEP_Y = 71
+local FLY_THRESHOLD_X = 2000
+local FLY_SPEED_MULT = 1.25
+local INSTANT_STEAL = true
+
+local CurrentDropTarget = nil
+
+local FlyAnimation = nil
+local HeadOriginalSize = nil
+local HeadOriginalMeshScale = nil
+local HeadScaled = false
+
+local SafeCarry = {
+    StepSpeed = 0.1,
+    DropDelay = 0,
+    SnapPickup = true,
+    PickupRatio = 0.667,
+    LineGap = 12,
+    LineWait = 15,
+    DirectBudget = 200000,
+    DirectMargin = 0.1
+}
+
+local AntiDieConnections = {}
+local HumanoidState = {
+    Character = nil,
+    NormalHumanoid = nil,
+    BypassHumanoid = nil
+}
+
+local StashedHumanoids = {}
+
+local function DisconnectAntiDie()
+    for _, connection in ipairs(AntiDieConnections) do
+        if connection then
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+    table.clear(AntiDieConnections)
+end
+
+local function GetCharacter()
+    return LocalPlayer.Character
+end
+
+local function GetRoot()
+    local character = GetCharacter()
+    if not character then
+        return nil
+    end
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if root and root:IsDescendantOf(workspace) then
+        return root
+    end
+    return nil
+end
+
+local function GetHumanoid()
+    local character = GetCharacter()
+    if not character then
+        return nil
+    end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function StopVelocity(root)
+    if not root then
+        return
+    end
+    pcall(function()
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function RestoreNormalHumanoid()
+    local character = GetCharacter()
+    if not character then
+        return
+    end
+
+    DisconnectAntiDie()
+
+    local stashed = StashedHumanoids[character]
+    local current = character:FindFirstChildOfClass("Humanoid")
+
+    if stashed and not stashed:IsDescendantOf(game) and stashed.Parent ~= nil then
+        stashed = nil
+    end
+
+    local target = stashed
+
+    if not target then
+        local old = character:FindFirstChild("_OldHumanoid")
+        local replaced = character:FindFirstChild("ReplacedHumanoid")
+        if old and old:IsA("Humanoid") then
+            target = old
+        elseif replaced and replaced:IsA("Humanoid") then
+            target = replaced
+        end
+    end
+
+    if not target then
+        target = current
+    end
+
+    if not target then
+        return
+    end
+
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA("Humanoid") and obj ~= target then
+            pcall(function()
+                obj:Destroy()
+            end)
+        end
+    end
+
+    target.Name = "Humanoid"
+    target:SetAttribute("VxzBypassHumanoid", nil)
+
+    if target.Parent ~= character then
+        target.Parent = character
+    end
+
+    pcall(function()
+        target:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+        target.BreakJointsOnDeath = true
+        target.Enabled = true
+    end)
+
+    if target.Health <= 0 then
+        pcall(function()
+            target.Health = target.MaxHealth
+        end)
+    end
+
+    local camera = workspace.CurrentCamera
+    if camera then
+        camera.CameraSubject = target
+    end
+
+    local animate = character:FindFirstChild("Animate")
+    if animate and animate:IsA("LocalScript") then
+        animate.Disabled = false
+    end
+
+    HumanoidState.NormalHumanoid = target
+    HumanoidState.BypassHumanoid = nil
+    HumanoidState.Character = character
+
+    StashedHumanoids[character] = nil
+end
+
+local function CreateBypassHumanoid(character)
+    if not character then
+        return nil
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return nil
+    end
+
+    if humanoid:GetAttribute("VxzBypassHumanoid") == true then
+        return humanoid
+    end
+
+    local animate = character:FindFirstChild("Animate")
+
+    local walkSpeed = humanoid.WalkSpeed
+    local jumpPower = humanoid.JumpPower
+    local jumpHeight = humanoid.JumpHeight
+    local maxHealth = humanoid.MaxHealth
+    local health = humanoid.Health
+    local autoRotate = humanoid.AutoRotate
+
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            pcall(function()
+                track:Stop(0)
+            end)
+        end
+    end
+
+    if animate and animate:IsA("LocalScript") then
+        animate.Disabled = true
+    end
+
+    humanoid.Archivable = true
+
+    local clone
+    local success = pcall(function()
+        clone = humanoid:Clone()
+    end)
+
+    if not success or not clone then
+        if animate and animate:IsA("LocalScript") then
+            animate.Disabled = false
+        end
+        return nil
+    end
+
+    clone.Name = "_BypassHumanoid"
+    clone:SetAttribute("VxzBypassHumanoid", true)
+
+    for _, object in ipairs(clone:GetChildren()) do
+        if object:IsA("Animator") then
+            object:Destroy()
+        end
+    end
+
+    pcall(function()
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        humanoid.BreakJointsOnDeath = false
+        humanoid.Enabled = false
+    end)
+
+    humanoid.Name = "_OldHumanoid"
+    humanoid:SetAttribute("VxzBypassHumanoid", nil)
+
+    StashedHumanoids[character] = humanoid
+    humanoid.Parent = nil
+
+    clone.Name = "Humanoid"
+    clone.Parent = character
+
+    clone.WalkSpeed = walkSpeed
+    clone.JumpPower = jumpPower
+    clone.JumpHeight = jumpHeight
+    clone.MaxHealth = maxHealth
+    clone.Health = math.clamp(health, 0, maxHealth)
+    clone.AutoRotate = autoRotate
+
+    local newAnimator = Instance.new("Animator")
+    newAnimator.Parent = clone
+
+    local camera = workspace.CurrentCamera
+    if camera then
+        camera.CameraSubject = clone
+    end
+
+    if animate and animate:IsA("LocalScript") then
+        task.defer(function()
+            if animate.Parent and Enabled then
+                animate.Disabled = false
+                task.wait()
+                if animate.Parent and Enabled then
+                    animate.Disabled = true
+                    task.wait()
+                    if animate.Parent and Enabled then
+                        animate.Disabled = false
+                    end
+                end
+            end
+        end)
+    end
+
+    HumanoidState.Character = character
+    HumanoidState.BypassHumanoid = clone
+    HumanoidState.NormalHumanoid = nil
+
+    return clone
+end
+
+local function ActivateAntiDie()
+    if not Enabled then
+        return
+    end
+
+    DisconnectAntiDie()
+
+    local character = GetCharacter()
+    if not character then
+        return
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return
+    end
+
+    humanoid:SetAttribute("VxzBypassHumanoid", true)
+
+    pcall(function()
+        humanoid.BreakJointsOnDeath = false
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+    end)
+
+    local healthConnection = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if not Enabled then
+            return
+        end
+        if humanoid.Parent and humanoid.Health <= 0 then
+            pcall(function()
+                humanoid.Health = humanoid.MaxHealth
+            end)
+        end
+    end)
+    table.insert(AntiDieConnections, healthConnection)
+
+    local diedConnection = humanoid.Died:Connect(function()
+        if not Enabled then
+            return
+        end
+        task.defer(function()
+            if not Enabled then
+                return
+            end
+            local currentCharacter = GetCharacter()
+            if not currentCharacter or currentCharacter ~= character or not currentCharacter.Parent then
+                return
+            end
+            local currentHumanoid = currentCharacter:FindFirstChildOfClass("Humanoid")
+            if currentHumanoid and currentHumanoid ~= humanoid then
+                return
+            end
+            local newHumanoid = Instance.new("Humanoid")
+            newHumanoid.Name = "ReplacedHumanoid"
+            newHumanoid:SetAttribute("VxzBypassHumanoid", true)
+            newHumanoid.Parent = currentCharacter
+            pcall(function()
+                newHumanoid.BreakJointsOnDeath = false
+                newHumanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+            end)
+            HumanoidState.BypassHumanoid = newHumanoid
+            local camera = workspace.CurrentCamera
+            if camera then
+                camera.CameraSubject = newHumanoid
+            end
+            pcall(function()
+                humanoid:Destroy()
+            end)
+            ActivateAntiDie()
+        end)
+    end)
+    table.insert(AntiDieConnections, diedConnection)
+end
+
+local function ActivateBypass()
+    if not Enabled then
+        return
+    end
+    local character = GetCharacter()
+    if not character then
+        return
+    end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return
+    end
+    if humanoid.Name == "Humanoid" and humanoid:GetAttribute("VxzBypassHumanoid") ~= true then
+        CreateBypassHumanoid(character)
+    end
+    ActivateAntiDie()
+end
+
+local function DeactivateBypass()
+    Returning = false
+    WaitingNextPrompt = false
+    CurrentDropTarget = nil
+    RestoreNormalHumanoid()
+end
+
+local function GetAntiRagdollCharacter()
+    return LocalPlayer.Character
+end
+
+local function GetAntiRagdollHumanoid(character)
+    if not character then
+        return nil
+    end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetAntiRagdollRoot(character)
+    if not character then
+        return nil
+    end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function ForceAntiRagdollReset()
+    local char = GetAntiRagdollCharacter()
+    if not char then
+        return
+    end
+
+    local hum = GetAntiRagdollHumanoid(char)
+    local root = GetAntiRagdollRoot(char)
+
+    if not hum or not root or hum.Health <= 0 then
+        return
+    end
+
+    pcall(function()
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+
+        root.Velocity = Vector3.zero
+        root.RotVelocity = Vector3.zero
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("Motor6D") then
+                obj.Enabled = true
+            elseif obj:IsA("Constraint") then
+                obj.Enabled = true
+            end
+        end
+
+        if workspace.CurrentCamera then
+            workspace.CurrentCamera.CameraSubject = hum
+        end
+
+        local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+        local playerModule = playerScripts and playerScripts:FindFirstChild("PlayerModule")
+
+        if playerModule then
+            local controlModuleScript = playerModule:FindFirstChild("ControlModule")
+            if controlModuleScript then
+                local controlModule = require(controlModuleScript)
+                if controlModule then
+                    controlModule:Enable()
+                end
+            end
+        end
+
+        hum.AutoRotate = true
+        hum.PlatformStand = false
+        hum.Sit = false
+    end)
+end
+
+local function StartAntiRagdoll()
+    if AntiRagdollConnection then
+        AntiRagdollConnection:Disconnect()
+        AntiRagdollConnection = nil
+    end
+
+    AntiRagdollConnection = RunService.Heartbeat:Connect(function()
+        if not AntiRagdollEnabled then
+            return
+        end
+
+        local char = GetAntiRagdollCharacter()
+        if not char then
+            return
+        end
+
+        local hum = GetAntiRagdollHumanoid(char)
+        if not hum or hum.Health <= 0 then
+            return
+        end
+
+        local state = hum:GetState()
+
+        local isRagdolled =
+            state == Enum.HumanoidStateType.Physics
+            or state == Enum.HumanoidStateType.Ragdoll
+            or state == Enum.HumanoidStateType.FallingDown
+
+        if isRagdolled then
+            local now = tick()
+            if now - AntiRagdollResetCooldown > 0.15 then
+                AntiRagdollResetCooldown = now
+                ForceAntiRagdollReset()
+            end
+        end
+    end)
+end
+
+local function StopAntiRagdoll()
+    if AntiRagdollConnection then
+        AntiRagdollConnection:Disconnect()
+        AntiRagdollConnection = nil
+    end
+end
+
+local function RunAntiTrap()
+    if AntiTrapRan then
+        return
+    end
+    AntiTrapRan = true
+    task.spawn(function()
+        local ok, err = pcall(function()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/Lutosys/opensrc/refs/heads/main/StealAnEggAntiTrap.lua"))()
+        end)
+        if not ok then
+            warn("AntiTrap load failed:", err)
+        end
+    end)
+end
+
+local function GetRigType(hum)
+    if hum and hum.RigType == Enum.HumanoidRigType.R15 then
+        return "R15"
+    end
+    return "R6"
+end
+
+local function StartFlyVisuals()
+    local char = GetCharacter()
+    if not char then
+        return
+    end
+    local hum = GetHumanoid()
+    if not hum then
+        return
+    end
+
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = hum
+    end
+
+    local walkId
+    if GetRigType(hum) == "R15" then
+        walkId = "rbxassetid://507777826"
+    else
+        walkId = "rbxassetid://180426354"
+    end
+
+    local anim = Instance.new("Animation")
+    anim.AnimationId = walkId
+
+    local ok, track = pcall(function()
+        return animator:LoadAnimation(anim)
+    end)
+
+    if ok and track then
+        pcall(function()
+            track.Priority = Enum.AnimationPriority.Movement
+            track:Play(0.3, 1, 0.4)
+        end)
+        FlyAnimation = track
+    end
+
+    local head = char:FindFirstChild("Head")
+    if head then
+        if head:IsA("BasePart") and not HeadScaled then
+            HeadOriginalSize = head.Size
+            head.Size = head.Size * 1.8
+            HeadScaled = true
+        end
+        local mesh = head:FindFirstChildOfClass("SpecialMesh")
+        if mesh then
+            if not HeadOriginalMeshScale then
+                HeadOriginalMeshScale = mesh.Scale
+            end
+            mesh.Scale = HeadOriginalMeshScale * 1.8
+        end
+    end
+end
+
+local function StopFlyVisuals()
+    if FlyAnimation then
+        pcall(function()
+            FlyAnimation:Stop(0.3)
+        end)
+        FlyAnimation = nil
+    end
+
+    local char = GetCharacter()
+    if char then
+        local head = char:FindFirstChild("Head")
+        if head then
+            if HeadScaled and HeadOriginalSize then
+                pcall(function()
+                    head.Size = HeadOriginalSize
+                end)
+            end
+            local mesh = head:FindFirstChildOfClass("SpecialMesh")
+            if mesh and HeadOriginalMeshScale then
+                pcall(function()
+                    mesh.Scale = HeadOriginalMeshScale
+                end)
+            end
+        end
+    end
+
+    HeadScaled = false
+    HeadOriginalSize = nil
+    HeadOriginalMeshScale = nil
+end
+
+local Networking = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Networking")
+
+local EggState
+pcall(function()
+    EggState = require(ReplicatedStorage:WaitForChild("Client"):WaitForChild("EggState"))
+end)
+
+local Carrying = false
+local CarryUid = nil
+local CarryAreaId = nil
+
+local NET = ReplicatedStorage:FindFirstChild("Packages")
+NET = NET and NET:FindFirstChild("Networking") or nil
+
+local function findRemote(name, alt)
+    local remote = NET and NET:FindFirstChild(name, true)
+    if remote then
+        return remote
+    end
+    remote = ReplicatedStorage:FindFirstChild(name, true)
+    if remote then
+        return remote
+    end
+    if alt then
+        remote = (NET and NET:FindFirstChild(alt, true)) or ReplicatedStorage:FindFirstChild(alt, true)
+    end
+    return remote
+end
+
+local AskFieldEggDrop = findRemote("RF/EggWorld/AskFieldEggDrop", "AskFieldEggDrop")
+
+local function DropEgg()
+    if not AskFieldEggDrop then
+        AskFieldEggDrop = findRemote("RF/EggWorld/AskFieldEggDrop", "AskFieldEggDrop")
+    end
+    if not AskFieldEggDrop then
+        return false
+    end
+    local ok = pcall(function()
+        if AskFieldEggDrop:IsA("RemoteFunction") then
+            AskFieldEggDrop:InvokeServer({ Reason = "PlayerRequest" })
+        else
+            AskFieldEggDrop:FireServer({ Reason = "PlayerRequest" })
+        end
+    end)
+    return ok
+end
+
+local function GetEggSnapshot()
+    local remote = Networking:FindFirstChild("RF/EggWorld/AskFieldEggSnapshot")
+    if not remote or not remote:IsA("RemoteFunction") then
+        return nil
+    end
+    local ok, result = pcall(function()
+        return remote:InvokeServer()
+    end)
+    if not ok or type(result) ~= "table" then
+        return nil
+    end
+    return result
+end
+
+local function FindEgg(uid)
+    if type(uid) ~= "string" then
+        return nil
+    end
+    local snapshot = GetEggSnapshot()
+    if not snapshot then
+        return nil
+    end
+    local records = snapshot.Records
+    if type(records) ~= "table" then
+        return nil
+    end
+    for _, record in pairs(records) do
+        if type(record) == "table" and record.Uid == uid then
+            return record
+        end
+    end
+    return nil
+end
+
+local function CarryEgg(uid)
+    if type(uid) ~= "string" then
+        return false
+    end
+    if not EggState then
+        return false
+    end
+    if type(EggState.CarryFieldEgg) ~= "function" then
+        return false
+    end
+    local ok = pcall(EggState.CarryFieldEgg, uid)
+    return ok
+end
+
+local function GetPromptPosition(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then
+        return nil
+    end
+    local parent = prompt.Parent
+    if not parent then
+        return nil
+    end
+    if parent:IsA("Attachment") then
+        return parent.WorldPosition
+    end
+    if parent:IsA("BasePart") then
+        return parent.Position
+    end
+    local part = parent:FindFirstChildWhichIsA("BasePart", true)
+    if part then
+        return part.Position
+    end
+    return nil
+end
+
+local function IsStealPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then
+        return false
+    end
+    local text = string.lower(tostring(prompt.ActionText or ""))
+    local objectText = string.lower(tostring(prompt.ObjectText or ""))
+    local combined = text .. " " .. objectText
+    return combined:find("steal", 1, true) ~= nil
+        or combined:find("cắp", 1, true) ~= nil
+        or combined:find("cap", 1, true) ~= nil
+        or combined:find("trộm", 1, true) ~= nil
+        or combined:find("trom", 1, true) ~= nil
+        or combined:find("egg", 1, true) ~= nil
+end
+
+local function ApplyInstantPrompt(prompt)
+    if not INSTANT_STEAL then
+        return
+    end
+    if not prompt or not prompt:IsA("ProximityPrompt") then
+        return
+    end
+    pcall(function()
+        prompt.HoldDuration = 0
+    end)
+end
+
+local function FirePrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then
+        return false
+    end
+
+    ApplyInstantPrompt(prompt)
+
+    local ok = false
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt, 0, true)
+            ok = true
+        end
+    end)
+    if ok then
+        return true
+    end
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt, 1, true)
+            ok = true
+        end
+    end)
+    return ok
+end
+
+local function FindEggPromptFromPosition(origin, maxDistance)
+    local best
+    local bestDistance = maxDistance or math.huge
+    for _, prompt in ipairs(workspace:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") and prompt.Enabled and IsStealPrompt(prompt) then
+            local position = GetPromptPosition(prompt)
+            if position then
+                local distance = (position - origin).Magnitude
+                if distance < bestDistance then
+                    bestDistance = distance
+                    best = prompt
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function FindEggPrompt()
+    local root = GetRoot()
+    if not root then
+        return nil
+    end
+    return FindEggPromptFromPosition(root.Position, math.huge)
+end
+
+local function WaitForEggPrompt(timeout)
+    local elapsed = 0
+    while elapsed < timeout do
+        if not Enabled then
+            return nil
+        end
+        local prompt = FindEggPrompt()
+        if prompt then
+            return prompt
+        end
+        elapsed += RunService.Heartbeat:Wait()
+    end
+    return nil
+end
+
+local function TeleportBase()
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+    local position = root.Position
+    local target = Vector3.new(BASE_X, position.Y, position.Z)
+    pcall(function()
+        root.CFrame = CFrame.new(target) * CFrame.Angles(0, math.rad(300), 0)
+        StopVelocity(root)
+    end)
+    return true
+end
+
+local function MoveTo(position, speed)
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+    local character = LocalPlayer.Character
+    local finished = false
+    local success = false
+    local connection
+
+    connection = RunService.Heartbeat:Connect(function(deltaTime)
+        local currentRoot = GetRoot()
+        if not currentRoot or LocalPlayer.Character ~= character then
+            finished = true
+            return
+        end
+        local current = currentRoot.Position
+        local offset = position - current
+        local distance = offset.Magnitude
+        if distance <= 0.5 then
+            pcall(function()
+                currentRoot.CFrame = CFrame.new(position) * CFrame.Angles(0, math.rad(300), 0)
+                StopVelocity(currentRoot)
+            end)
+            success = true
+            finished = true
+            return
+        end
+        local step = math.max(speed * deltaTime, 0.1)
+        local nextPosition = current + offset.Unit * math.min(step, distance)
+        pcall(function()
+            currentRoot.CFrame = CFrame.new(nextPosition) * CFrame.Angles(0, math.rad(300), 0)
+            StopVelocity(currentRoot)
+        end)
+    end)
+
+    while not finished do
+        if not Enabled then
+            finished = true
+            break
+        end
+        RunService.Heartbeat:Wait()
+    end
+
+    if connection then
+        connection:Disconnect()
+    end
+    return success
+end
+
+local function FlyTo(targetPosition, speed)
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+
+    local character = LocalPlayer.Character
+
+    StartFlyVisuals()
+
+    while Enabled and Returning do
+        local part = GetRoot()
+        if not part or LocalPlayer.Character ~= character then
+            StopFlyVisuals()
+            return false
+        end
+
+        local current = part.Position
+        local dx = targetPosition.X - current.X
+        local dz = targetPosition.Z - current.Z
+        local distance = math.sqrt(dx * dx + dz * dz)
+
+        if distance <= 1 then
+            pcall(function()
+                part.CFrame = CFrame.new(targetPosition.X, STEP_Y, targetPosition.Z) * CFrame.Angles(0, math.rad(300), 0)
+                part.AssemblyLinearVelocity = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+            end)
+            StopFlyVisuals()
+            return true
+        end
+
+        local invDist = 1 / distance
+        local dirX = dx * invDist
+        local dirZ = dz * invDist
+
+        pcall(function()
+            part.CFrame = CFrame.new(current.X, STEP_Y, current.Z) * CFrame.Angles(0, math.rad(300), 0)
+            part.AssemblyLinearVelocity = Vector3.new(dirX * speed, 0, dirZ * speed)
+            part.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        RunService.Heartbeat:Wait()
+    end
+
+    StopFlyVisuals()
+    return false
+end
+
+local function GetStepDistance(value)
+    local distance = math.abs(value)
+    if distance < 2000 then
+        return 300
+    elseif distance < 3000 then
+        return 300
+    elseif distance < 4000 then
+        return 450
+    elseif distance < 6000 then
+        return 600
+    else
+        return 750
+    end
+end
+
+local function SetRootY71()
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+    local pos = root.Position
+    pcall(function()
+        root.CFrame = CFrame.new(pos.X, STEP_Y, pos.Z)
+        StopVelocity(root)
+    end)
+    return true
+end
+
+local function GetSeparationLine()
+    local areas = workspace:FindFirstChild("World") or workspace:FindFirstChild("__OBJECTS")
+    areas = areas and areas:FindFirstChild("Areas")
+    local line = areas and areas:FindFirstChild("SeparationLine")
+    if line and line:IsA("BasePart") then
+        return line
+    end
+    return nil
+end
+
+local function GetHome()
+    return Vector3.new(528.7, 70.57, -364.11)
+end
+
+local function StepAxis(axis, targetValue, character)
+    while Enabled and Returning do
+        local part = GetRoot()
+        if not part then
+            return false
+        end
+        if LocalPlayer.Character ~= character then
+            return false
+        end
+
+        local current = part.Position
+        local currentVal
+        if axis == "X" then
+            currentVal = current.X
+        else
+            currentVal = current.Z
+        end
+
+        local distance = math.abs(targetValue - currentVal)
+        if distance <= 0.5 then
+            break
+        end
+
+        local direction
+        if targetValue > currentVal then
+            direction = 1
+        else
+            direction = -1
+        end
+
+        local stepDistance = math.min(GetStepDistance(currentVal), distance)
+        local nextVal = currentVal + direction * stepDistance
+
+        if direction > 0 and nextVal > targetValue then
+            nextVal = targetValue
+        elseif direction < 0 and nextVal < targetValue then
+            nextVal = targetValue
+        end
+
+        local timer = 0
+        while timer < SafeCarry.StepSpeed and Enabled and Returning do
+            local stepRoot = GetRoot()
+            if not stepRoot then
+                return false
+            end
+            local pos = stepRoot.Position
+            local newX, newZ
+            if axis == "X" then
+                newX = nextVal
+                newZ = pos.Z
+            else
+                newX = pos.X
+                newZ = nextVal
+            end
+            pcall(function()
+                stepRoot.CFrame = CFrame.new(newX, STEP_Y, newZ) * CFrame.Angles(0, math.rad(300), 0)
+                StopVelocity(stepRoot)
+            end)
+            timer += RunService.Heartbeat:Wait()
+        end
+    end
+
+    return true
+end
+
+local function StepToBase()
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+
+    local character = LocalPlayer.Character
+    local startPosition = root.Position
+    local startX = startPosition.X
+    local startZ = startPosition.Z
+
+    local humanoid = GetHumanoid()
+    local playerSpeed = humanoid and humanoid.WalkSpeed or 16
+    local flySpeed = playerSpeed * FLY_SPEED_MULT
+
+    pcall(function()
+        root.CFrame = CFrame.new(startX, STEP_Y, startZ) * CFrame.Angles(0, math.rad(300), 0)
+        StopVelocity(root)
+    end)
+
+    if startX < FLY_THRESHOLD_X then
+        CurrentDropTarget = Vector3.new(BASE_X, STEP_Y, startZ)
+        local ok = FlyTo(CurrentDropTarget, flySpeed)
+        if not ok then
+            return false
+        end
+        return true
+    end
+
+    CurrentDropTarget = Vector3.new(STEP_TARGET_X, STEP_Y, STEP_TARGET_Z)
+
+    local okX = StepAxis("X", STEP_TARGET_X, character)
+    if not okX then
+        return false
+    end
+
+    if not Enabled or not Returning then
+        return false
+    end
+
+    local okZ = StepAxis("Z", STEP_TARGET_Z, character)
+    if not okZ then
+        return false
+    end
+
+    local finalRoot = GetRoot()
+    if not finalRoot then
+        return false
+    end
+
+    pcall(function()
+        finalRoot.CFrame = CFrame.new(STEP_TARGET_X, STEP_Y, STEP_TARGET_Z) * CFrame.Angles(0, math.rad(300), 0)
+        StopVelocity(finalRoot)
+    end)
+    RunService.Heartbeat:Wait()
+
+    local checkRoot = GetRoot()
+    if not checkRoot then
+        return false
+    end
+
+    pcall(function()
+        checkRoot.CFrame = CFrame.new(STEP_TARGET_X, STEP_Y, STEP_TARGET_Z) * CFrame.Angles(0, math.rad(300), 0)
+        StopVelocity(checkRoot)
+    end)
+
+    return true
+end
+
+local function WaitUntilCarrying(uid, timeout)
+    local elapsed = 0
+    while elapsed < timeout do
+        if not Enabled then
+            return false
+        end
+        if Carrying and (type(uid) ~= "string" or CarryUid == uid) then
+            return true
+        end
+        elapsed += RunService.Heartbeat:Wait()
+    end
+    return false
+end
+
+local function CarryAgainAtDropPoint(uid, dropPosition)
+    if type(uid) ~= "string" then
+        return false
+    end
+    if not dropPosition then
+        return false
+    end
+    if Carrying and CarryUid == uid then
+        return true
+    end
+
+    local prompt
+    local elapsed = 0
+    while elapsed < 3 do
+        if not Enabled then
+            return false
+        end
+        prompt = FindEggPromptFromPosition(dropPosition, 35)
+        if prompt then
+            break
+        end
+        elapsed += RunService.Heartbeat:Wait()
+    end
+
+    if not prompt then
+        CarryEgg(uid)
+        if WaitUntilCarrying(uid, 0.5) then
+            return true
+        end
+        return false
+    end
+
+    local promptPosition = GetPromptPosition(prompt)
+    if promptPosition then
+        local root = GetRoot()
+        if root then
+            local distance = (promptPosition - root.Position).Magnitude
+            if distance > 8 then
+                local resetRoot = GetRoot()
+                if resetRoot then
+                    pcall(function()
+                        resetRoot.CFrame = CFrame.new(dropPosition.X, STEP_Y, dropPosition.Z)
+                        StopVelocity(resetRoot)
+                    end)
+                    RunService.Heartbeat:Wait()
+                end
+            end
+        end
+    end
+
+    FirePrompt(prompt)
+    task.wait(0.05)
+
+    if Carrying and CarryUid == uid then
+        return true
+    end
+
+    CarryEgg(uid)
+    if WaitUntilCarrying(uid, 0.5) then
+        return true
+    end
+
+    FirePrompt(prompt)
+    CarryEgg(uid)
+    if WaitUntilCarrying(uid, 1) then
+        return true
+    end
+
+    return false
+end
+
+local function ReturnToX530()
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+    local humanoid = GetHumanoid()
+    local playerSpeed = humanoid and humanoid.WalkSpeed or 16
+    local returnSpeed = playerSpeed * FLY_SPEED_MULT
+    local current = root.Position
+    local target = Vector3.new(BASE_X, STEP_Y, current.Z)
+    return MoveTo(target, returnSpeed)
+end
+
+local function EnsureExactDropPosition(targetPosition)
+    if not targetPosition then
+        return false
+    end
+
+    for _ = 1, 3 do
+        local root = GetRoot()
+        if not root then
+            return false
+        end
+
+        local pos = root.Position
+        local dx = math.abs(pos.X - targetPosition.X)
+        local dz = math.abs(pos.Z - targetPosition.Z)
+
+        if dx <= 0.5 and dz <= 0.5 then
+            return true
+        end
+
+        pcall(function()
+            root.CFrame = CFrame.new(targetPosition.X, STEP_Y, targetPosition.Z) * CFrame.Angles(0, math.rad(300), 0)
+            StopVelocity(root)
+        end)
+        RunService.Heartbeat:Wait()
+        RunService.Heartbeat:Wait()
+    end
+
+    local root = GetRoot()
+    if not root then
+        return false
+    end
+    local pos = root.Position
+    return math.abs(pos.X - targetPosition.X) <= 1 and math.abs(pos.Z - targetPosition.Z) <= 1
+end
+
+local function DropThenPrompt()
+    if not Carrying then
+        return false
+    end
+
+    local uid = CarryUid
+    if type(uid) ~= "string" then
+        return false
+    end
+
+    local targetPosition = CurrentDropTarget
+    if not targetPosition then
+        targetPosition = Vector3.new(STEP_TARGET_X, STEP_Y, STEP_TARGET_Z)
+    end
+
+    if not EnsureExactDropPosition(targetPosition) then
+        return false
+    end
+
+    local dropPosition = Vector3.new(targetPosition.X, STEP_Y, targetPosition.Z)
+
+    local dropped = DropEgg()
+    if not dropped then
+        return false
+    end
+
+    task.wait(DROP_WAIT)
+
+    if not Enabled then
+        return false
+    end
+
+    local rootAfterDrop = GetRoot()
+    if not rootAfterDrop then
+        return false
+    end
+
+    pcall(function()
+        rootAfterDrop.CFrame = CFrame.new(targetPosition.X, STEP_Y, targetPosition.Z) * CFrame.Angles(0, math.rad(300), 0)
+        StopVelocity(rootAfterDrop)
+    end)
+    RunService.Heartbeat:Wait()
+
+    local carriedAgain = CarryAgainAtDropPoint(uid, dropPosition)
+    if not carriedAgain then
+        return false
+    end
+
+    if not Carrying then
+        return false
+    end
+
+    if CarryUid ~= uid then
+        return false
+    end
+
+    task.wait(0.05)
+
+    if not Carrying or CarryUid ~= uid then
+        return false
+    end
+
+    if targetPosition.X <= BASE_X + 5 then
+        return true
+    end
+
+    return ReturnToX530()
+end
+
+local function ProcessCarry()
+    if not Enabled then
+        return
+    end
+    if Returning then
+        return
+    end
+    if not Carrying then
+        return
+    end
+    if type(CarryUid) ~= "string" then
+        return
+    end
+
+    Returning = true
+    CurrentDropTarget = nil
+
+    local stepped = StepToBase()
+    if not stepped then
+        Returning = false
+        CurrentDropTarget = nil
+        return
+    end
+
+    if not Carrying then
+        Returning = false
+        CurrentDropTarget = nil
+        return
+    end
+
+    DropThenPrompt()
+
+    Returning = false
+    WaitingNextPrompt = true
+    CurrentDropTarget = nil
+end
+
+if EggState and type(EggState.CarryChanged) == "table" and type(EggState.CarryChanged.Connect) == "function" then
+    pcall(function()
+        EggState.CarryChanged:Connect(function(data)
+            local carrying = type(data) == "table" and data.IsCarrying == true
+            Carrying = carrying
+            if carrying and type(data.Uid) == "string" then
+                CarryUid = data.Uid
+                CarryAreaId = data.AreaId
+            elseif not carrying then
+                CarryUid = nil
+                CarryAreaId = nil
+            end
+        end)
+    end)
+end
+
+ProximityPromptService.PromptTriggered:Connect(function(prompt, player)
+    if not Enabled then
+        return
+    end
+    if player ~= LocalPlayer then
+        return
+    end
+    if Returning then
+        return
+    end
+    if not IsStealPrompt(prompt) then
+        return
+    end
+
+    ApplyInstantPrompt(prompt)
+
+    task.spawn(function()
+        local start = os.clock()
+        while Enabled and not Carrying and os.clock() - start < 1 do
+            RunService.Heartbeat:Wait()
+        end
+        if not Enabled or not Carrying then
+            return
+        end
+        ProcessCarry()
+    end)
+end)
+
+LocalPlayer.CharacterAdded:Connect(function(character)
+    Returning = false
+    WaitingNextPrompt = false
+    Carrying = false
+    CarryUid = nil
+    CarryAreaId = nil
+    CurrentDropTarget = nil
+
+    StopFlyVisuals()
+
+    if Enabled then
+        task.spawn(function()
+            local humanoid = character:WaitForChild("Humanoid", 5)
+            if not humanoid then
+                return
+            end
+            task.wait(0.15)
+            if Enabled and LocalPlayer.Character == character then
+                ActivateBypass()
+            end
+        end)
+    end
+
+    if AntiRagdollEnabled then
+        task.wait(0.2)
+        ForceAntiRagdollReset()
+    end
+end)
+
+LocalPlayer.CharacterRemoving:Connect(function(character)
+    if StashedHumanoids[character] then
+        pcall(function()
+            StashedHumanoids[character]:Destroy()
+        end)
+        StashedHumanoids[character] = nil
+    end
+end)
+
+StartAntiRagdoll()
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "VxzBypassTPV2"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999999
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(240, 200)
+Main.Position = UDim2.new(0.5, -120, 0, 90)
+Main.BackgroundColor3 = Color3.fromRGB(15, 15, 17)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 14)
+MainCorner.Parent = Main
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(55, 55, 60)
+MainStroke.Thickness = 1
+MainStroke.Transparency = 0.15
+MainStroke.Parent = Main
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -65, 0, 28)
+Title.Position = UDim2.fromOffset(14, 7)
+Title.BackgroundTransparency = 1
+Title.Text = "Bypass TP V2"
+Title.TextColor3 = Color3.fromRGB(240, 240, 245)
+Title.TextSize = 14
+Title.Font = Enum.Font.GothamSemibold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Main
+
+local function CreateRow(yOffset, labelText, defaultOn, defaultColorOn)
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -75, 0, 22)
+    status.Position = UDim2.fromOffset(14, yOffset)
+    status.BackgroundTransparency = 1
+    status.Text = labelText
+    status.TextColor3 = defaultColorOn
+    status.TextSize = 11
+    status.Font = Enum.Font.Gotham
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = Main
+
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.fromOffset(40, 22)
+    toggle.Position = UDim2.new(1, -54, 0, yOffset + 1)
+    toggle.BackgroundColor3 = defaultOn and Color3.fromRGB(70, 180, 100) or Color3.fromRGB(55, 55, 60)
+    toggle.BorderSizePixel = 0
+    toggle.AutoButtonColor = false
+    toggle.Text = ""
+    toggle.Parent = Main
+
+    local toggleCorner = Instance.new("UICorner")
+    toggleCorner.CornerRadius = UDim.new(1, 0)
+    toggleCorner.Parent = toggle
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.fromOffset(16, 16)
+    knob.Position = defaultOn and UDim2.new(1, -20, 0.5, -8) or UDim2.fromOffset(3, 3)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.BorderSizePixel = 0
+    knob.Parent = toggle
+
+    local knobCorner = Instance.new("UICorner")
+    knobCorner.CornerRadius = UDim.new(1, 0)
+    knobCorner.Parent = knob
+
+    return status, toggle, knob
+end
+
+local StatusBypass, ToggleBypass, KnobBypass = CreateRow(
+    34,
+    "Bypass TP: ON",
+    true,
+    Color3.fromRGB(120, 220, 145)
+)
+
+local StatusRagdoll, ToggleRagdoll, KnobRagdoll = CreateRow(
+    62,
+    "Anti Ragdoll: ON",
+    true,
+    Color3.fromRGB(120, 220, 145)
+)
+
+local StatusTrap, ToggleTrap, KnobTrap = CreateRow(
+    90,
+    "Anti Trap: ON",
+    true,
+    Color3.fromRGB(120, 220, 145)
+)
+
+local Subtitle = Instance.new("TextLabel")
+Subtitle.Name = "Subtitle"
+Subtitle.Size = UDim2.new(1, -28, 0, 70)
+Subtitle.Position = UDim2.fromOffset(14, 122)
+Subtitle.BackgroundTransparency = 1
+Subtitle.Text = "Work On: Abyss Ocean, Prehistoric, Cosmic, Cherry Blossom, Titan Temple, Light Dark"
+Subtitle.TextColor3 = Color3.fromRGB(120, 120, 128)
+Subtitle.TextSize = 10
+Subtitle.Font = Enum.Font.Gotham
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.TextYAlignment = Enum.TextYAlignment.Top
+Subtitle.TextWrapped = true
+Subtitle.RichText = false
+Subtitle.Parent = Main
+
+local function UpdateBypassUI()
+    if Enabled then
+        ToggleBypass.BackgroundColor3 = Color3.fromRGB(70, 180, 100)
+        KnobBypass.Position = UDim2.new(1, -20, 0.5, -8)
+        StatusBypass.Text = "Bypass TP: ON"
+        StatusBypass.TextColor3 = Color3.fromRGB(120, 220, 145)
+    else
+        ToggleBypass.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+        KnobBypass.Position = UDim2.fromOffset(3, 3)
+        StatusBypass.Text = "Bypass TP: OFF"
+        StatusBypass.TextColor3 = Color3.fromRGB(150, 150, 155)
+    end
+end
+
+local function UpdateRagdollUI()
+    if AntiRagdollEnabled then
+        ToggleRagdoll.BackgroundColor3 = Color3.fromRGB(70, 180, 100)
+        KnobRagdoll.Position = UDim2.new(1, -20, 0.5, -8)
+        StatusRagdoll.Text = "Anti Ragdoll: ON"
+        StatusRagdoll.TextColor3 = Color3.fromRGB(120, 220, 145)
+    else
+        ToggleRagdoll.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+        KnobRagdoll.Position = UDim2.fromOffset(3, 3)
+        StatusRagdoll.Text = "Anti Ragdoll: OFF"
+        StatusRagdoll.TextColor3 = Color3.fromRGB(150, 150, 155)
+    end
+end
+
+local function UpdateTrapUI()
+    if AntiTrapEnabled then
+        ToggleTrap.BackgroundColor3 = Color3.fromRGB(70, 180, 100)
+        KnobTrap.Position = UDim2.new(1, -20, 0.5, -8)
+        StatusTrap.Text = "Anti Trap: ON"
+        StatusTrap.TextColor3 = Color3.fromRGB(120, 220, 145)
+    else
+        ToggleTrap.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+        KnobTrap.Position = UDim2.fromOffset(3, 3)
+        StatusTrap.Text = "Anti Trap: OFF"
+        StatusTrap.TextColor3 = Color3.fromRGB(150, 150, 155)
+    end
+end
+
+ToggleBypass.MouseButton1Click:Connect(function()
+    Enabled = not Enabled
+    if Enabled then
+        UpdateBypassUI()
+        task.spawn(function()
+            local character = GetCharacter()
+            if character then
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    task.wait(0.05)
+                    ActivateBypass()
+                end
+            end
+        end)
+    else
+        UpdateBypassUI()
+        DeactivateBypass()
+    end
+end)
+
+ToggleRagdoll.MouseButton1Click:Connect(function()
+    AntiRagdollEnabled = not AntiRagdollEnabled
+    UpdateRagdollUI()
+    if AntiRagdollEnabled then
+        ForceAntiRagdollReset()
+    end
+end)
+
+ToggleTrap.MouseButton1Click:Connect(function()
+    AntiTrapEnabled = not AntiTrapEnabled
+    UpdateTrapUI()
+    if AntiTrapEnabled then
+        RunAntiTrap()
+    end
+end)
+
+local dragging = false
+local dragStart
+local startPosition
+
+local function IsOnToggle(pos)
+    local toggles = { ToggleBypass, ToggleRagdoll, ToggleTrap }
+    for _, t in ipairs(toggles) do
+        if pos.X > t.AbsolutePosition.X
+            and pos.X < t.AbsolutePosition.X + t.AbsoluteSize.X
+            and pos.Y > t.AbsolutePosition.Y
+            and pos.Y < t.AbsolutePosition.Y + t.AbsoluteSize.Y then
+            return true
+        end
+    end
+    return false
+end
+
+Main.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if IsOnToggle(input.Position) then
+                return
+            end
+        end
+        dragging = true
+        dragStart = input.Position
+        startPosition = Main.Position
+    end
+end)
+
+Main.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not dragging then
+        return
+    end
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+        return
+    end
+    local delta = input.Position - dragStart
+    Main.Position = UDim2.new(
+        startPosition.X.Scale,
+        startPosition.X.Offset + delta.X,
+        startPosition.Y.Scale,
+        startPosition.Y.Offset + delta.Y
+    )
+end)
+
+UpdateBypassUI()
+UpdateRagdollUI()
+UpdateTrapUI()
+
+task.spawn(function()
+    task.wait(0.2)
+    if Enabled then
+        ActivateBypass()
+    end
+    if AntiTrapEnabled then
+        RunAntiTrap()
+    end
+end)
